@@ -114,11 +114,14 @@ export function sendLiveAudioPcm(
   session: Session,
   pcmBytes: Uint8Array
 ): void {
-  const blob = new Blob([pcmBytes], {
-    type: "audio/pcm;rate=16000",
+  // In Node, @google/genai expects { data, mimeType } for realtime audio.
+  const data = Buffer.from(pcmBytes).toString("base64")
+  session.sendRealtimeInput({
+    audio: {
+      data,
+      mimeType: "audio/pcm;rate=16000",
+    },
   })
-  // SDK types use Blob_2; Node global Blob is structurally compatible at runtime.
-  session.sendRealtimeInput({ audio: blob as Parameters<Session["sendRealtimeInput"]>[0]["audio"] })
 }
 
 export async function consolidateChunk(
