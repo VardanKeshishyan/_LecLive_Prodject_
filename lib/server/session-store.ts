@@ -77,8 +77,12 @@ export function touch(state: InternalSessionState): void {
 
 export function appendRollingText(state: InternalSessionState, text: string): void {
   if (!text.trim()) return
-  state.rollingModelText += text
-  state.bufferSinceLastChunk += text
+  const normalized = text.trim()
+  if (state.rollingModelText.length > 0) {
+    state.rollingModelText += "\n"
+  }
+  state.rollingModelText += normalized
+  state.bufferSinceLastChunk += `${normalized}\n`
   touch(state)
 }
 
@@ -108,6 +112,7 @@ export function toPublicSession(state: InternalSessionState): PublicSession {
     status: state.status,
     lastUpdated: state.lastUpdated,
     liveBullets: state.liveBullets,
+    rollingText: state.rollingModelText,
     savedChunks: state.savedChunks,
     summary: state.summary,
     fallbackNote: state.fallbackNote,

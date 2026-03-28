@@ -46,6 +46,7 @@ export interface PublicSession {
   status: SessionStatus
   lastUpdated: string
   liveBullets: LiveBullet[]
+  rollingText: string
   savedChunks: SavedChunkNote[]
   summary?: SessionSummary
   /** When Live connection failed but session continues in degraded/mock path */

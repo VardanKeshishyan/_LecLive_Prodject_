@@ -50,6 +50,7 @@ export function LiveLectureClient() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [session, setSession] = useState<PublicSession | null>(null)
   const [liveBullets, setLiveBullets] = useState<LiveBullet[]>([])
+  const [rollingText, setRollingText] = useState("")
   const [savedChunks, setSavedChunks] = useState<SavedChunkNote[]>([])
   const [apiStatus, setApiStatus] = useState<string>("Live")
   const [lastUpdatedLabel, setLastUpdatedLabel] = useState<string>("")
@@ -102,6 +103,7 @@ export function LiveLectureClient() {
   const hydrateFromPublic = useCallback((pub: PublicSession) => {
     setSession(pub)
     setLiveBullets(pub.liveBullets)
+    setRollingText(pub.rollingText)
     setSavedChunks(pub.savedChunks)
     if (pub.status === "organizing") setApiStatus("Organizing notes…")
     else setApiStatus("Live")
@@ -353,24 +355,28 @@ export function LiveLectureClient() {
                 <CardHeader className="pb-2 border-b border-border/30">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Zap className="h-4 w-4 text-primary" />
-                    Live quick bullets
+                    Live spoken words
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-3 max-h-36 overflow-y-auto">
-                  <ul className="space-y-1.5">
-                    {liveBullets.length === 0 ? (
-                      <li className="text-sm text-muted-foreground">Waiting for audio…</li>
-                    ) : (
-                      liveBullets.map((b) => (
+                  {rollingText.trim() ? (
+                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
+                      {rollingText}
+                    </p>
+                  ) : liveBullets.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {liveBullets.map((b) => (
                         <li
                           key={b.id}
                           className="text-sm text-foreground/90 leading-snug border-l-2 border-primary/40 pl-2"
                         >
                           {b.text}
                         </li>
-                      ))
-                    )}
-                  </ul>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Waiting for audio...</p>
+                  )}
                 </CardContent>
               </Card>
 
@@ -452,7 +458,7 @@ export function LiveLectureClient() {
                     ))}
                     {savedChunks.length === 0 && (
                       <p className="text-sm text-muted-foreground text-center py-8">
-                        Saved blocks appear every few minutes while you lecture stays active. Nothing is
+                        Saved blocks appear as you keep speaking. Nothing is
                         removed when new blocks arrive.
                       </p>
                     )}

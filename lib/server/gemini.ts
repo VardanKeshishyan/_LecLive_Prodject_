@@ -30,8 +30,8 @@ export function isMockMode(): boolean {
 
 export function getChunkIntervalMs(): number {
   const raw = process.env.GEMINI_CHUNK_INTERVAL_MS
-  const n = raw ? parseInt(raw, 10) : 180_000
-  return Number.isFinite(n) && n >= 30_000 ? n : 180_000
+  const n = raw ? parseInt(raw, 10) : 30_000
+  return Number.isFinite(n) && n >= 15_000 ? n : 30_000
 }
 
 /**
