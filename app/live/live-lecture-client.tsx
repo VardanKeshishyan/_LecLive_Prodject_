@@ -68,6 +68,14 @@ export function LiveLectureClient() {
   const pausedRef = useRef(isPaused)
   pausedRef.current = isPaused
 
+  const resetMissingSession = () => {
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("lectureSessionId")
+    }
+    setApiStatus("Session expired - start again")
+    router.replace("/session")
+  }
+
   useEffect(() => {
     const id =
       searchParams.get("sessionId") ||
@@ -107,10 +115,13 @@ export function LiveLectureClient() {
     void (async () => {
       try {
         const res = await fetch(`/api/session/${sessionId}`)
-        if (res.ok) {
-          const pub = (await res.json()) as PublicSession
-          hydrateFromPublic(pub)
+        if (res.status === 404) {
+          resetMissingSession()
+          return
         }
+        if (!res.ok) return
+        const pub = (await res.json()) as PublicSession
+        hydrateFromPublic(pub)
       } catch {
         /* ignore */
       }
@@ -132,7 +143,15 @@ export function LiveLectureClient() {
       try {
         const handle = await startPcmStreaming(sessionId, {
           shouldSend: () => !pausedRef.current && !cancelled,
-          onTransportError: (e) => console.error("[chunk]", e),
+          onTransportError: (e) => {
+            console.error("[chunk]", e)
+            const message = e instanceof Error ? e.message : String(e)
+            if (message.includes("Session not found")) {
+              resetMissingSession()
+              return
+            }
+            setApiStatus("Live stream error")
+          },
           onChunkResponse: (body) => {
             const b = body as { session?: PublicSession }
             if (b.session) mergeChunkResponse(b.session)
@@ -161,10 +180,13 @@ export function LiveLectureClient() {
     const poll = setInterval(async () => {
       try {
         const res = await fetch(`/api/session/${sessionId}`)
-        if (res.ok) {
-          const pub = (await res.json()) as PublicSession
-          mergeChunkResponse(pub)
+        if (res.status === 404) {
+          resetMissingSession()
+          return
         }
+        if (!res.ok) return
+        const pub = (await res.json()) as PublicSession
+        mergeChunkResponse(pub)
       } catch {
         /* ignore */
       }

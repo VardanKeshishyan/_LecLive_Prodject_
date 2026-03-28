@@ -32,7 +32,13 @@ export interface InternalSessionState {
   fallbackNote?: string
 }
 
-const store = new Map<string, InternalSessionState>()
+const globalStore = globalThis as typeof globalThis & {
+  __lectureSessionStore__?: Map<string, InternalSessionState>
+}
+
+const store =
+  globalStore.__lectureSessionStore__ ??
+  (globalStore.__lectureSessionStore__ = new Map<string, InternalSessionState>())
 
 export function createSession(meta: SessionMeta): InternalSessionState {
   const id = randomUUID()
