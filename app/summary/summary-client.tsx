@@ -127,49 +127,20 @@ export function SummaryClient() {
     if (!searchQuery.trim()) return true
     return text.toLowerCase().includes(searchQuery.toLowerCase())
   }
-
-  if (loadError) {
-    return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4">
-        <p className="text-muted-foreground text-center">{loadError}</p>
-        <Button asChild>
-          <Link href="/session">Start a session</Link>
-        </Button>
-      </div>
-    )
-  }
-
-  if (!session) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">
-        Loading summary…
-      </div>
-    )
-  }
-
-  if (!session.summary) {
-    return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4">
-        <p className="text-muted-foreground text-center max-w-md">
-          No summary yet. End your lecture from the live page to generate a final study guide.
-        </p>
-        <Button asChild>
-          <Link href={sessionId ? `/live?sessionId=${sessionId}` : "/live"}>Back to live</Link>
-        </Button>
-      </div>
-    )
-  }
-
-  const summary = session.summary
-  const transcriptText = useMemo(() => buildTranscript(session), [session])
+  const summary = session?.summary ?? null
+  const transcriptText = useMemo(() => (session ? buildTranscript(session) : ""), [session])
   const simplifiedSummary = useMemo(() => {
+    if (!summary) return ""
     const firstTopics = summary.mainTopics.slice(0, 3).join(". ")
     return `Simple version: ${summary.overallSummary} Main ideas: ${firstTopics || "Review saved notes for details."}`
-  }, [summary.mainTopics, summary.overallSummary])
+  }, [summary])
 
-  const noteCount = session.savedChunks.reduce((n, c) => n + c.keyPoints.length, 0) || session.savedChunks.length
+  const noteCount = session
+    ? session.savedChunks.reduce((n, c) => n + c.keyPoints.length, 0) || session.savedChunks.length
+    : 0
 
   const exportSummary = useCallback(() => {
+    if (!session || !summary) return
     const content = [
       session.meta.title || "Lecture summary",
       "",
@@ -192,14 +163,16 @@ export function SummaryClient() {
   }, [session, summary])
 
   const downloadTranscript = useCallback(() => {
+    if (!session) return
     if (!transcriptText.trim()) return
     downloadTextFile(
       `${(session.meta.title || "lecture-transcript").replace(/\s+/g, "-")}.txt`,
       transcriptText
     )
-  }, [session.meta.title, transcriptText])
+  }, [session, transcriptText])
 
   const generateQuiz = useCallback(() => {
+    if (!summary) return
     const fromTopics = summary.mainTopics.slice(0, 3).map(
       (topic, i) => `Q${i + 1}. Explain this topic in your own words: ${topic}`
     )
@@ -207,9 +180,10 @@ export function SummaryClient() {
       (d, i) => `Q${fromTopics.length + i + 1}. Define "${d.term}" and give one example.`
     )
     setAiQuiz([...fromTopics, ...fromDefs])
-  }, [summary.mainTopics, summary.majorDefinitions])
+  }, [summary])
 
   const readSummaryAloud = useCallback(() => {
+    if (!summary) return
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return
     if (speakingRef.current) {
       window.speechSynthesis.cancel()
@@ -228,7 +202,7 @@ export function SummaryClient() {
     setIsPlaying(true)
     window.speechSynthesis.cancel()
     window.speechSynthesis.speak(utterance)
-  }, [showSimplified, simplifiedSummary, speechRate, summary.overallSummary])
+  }, [showSimplified, simplifiedSummary, speechRate, summary])
 
   const readTextAloud = useCallback(
     (text: string) => {
@@ -246,6 +220,7 @@ export function SummaryClient() {
   )
 
   const handleAssistantPrompt = useCallback(() => {
+    if (!summary) return
     const q = assistantPrompt.trim().toLowerCase()
     if (!q) return
 
@@ -271,10 +246,11 @@ export function SummaryClient() {
         ? `Most relevant topic: ${topicMatch}`
         : `Best summary answer: ${summary.overallSummary.slice(0, 220)}...`
     )
-  }, [assistantPrompt, generateQuiz, summary.mainTopics, summary.majorDefinitions, summary.overallSummary])
+  }, [assistantPrompt, generateQuiz, summary])
 
   const handleAssistantAction = useCallback(
     (action: "repeat" | "simplify" | "read" | "slide" | "quiz") => {
+      if (!session || !summary) return
       if (action === "repeat") {
         const latest = session.savedChunks[session.savedChunks.length - 1]
         const text = latest?.keyPoints[latest.keyPoints.length - 1] || latest?.title || ""
@@ -303,8 +279,40 @@ export function SummaryClient() {
       generateQuiz()
       setAssistantReply("Quiz generated from your summary.")
     },
-    [generateQuiz, readTextAloud, session.savedChunks, summary.overallSummary, transcriptText]
+    [generateQuiz, readTextAloud, session, summary, transcriptText]
   )
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4">
+        <p className="text-muted-foreground text-center">{loadError}</p>
+        <Button asChild>
+          <Link href="/session">Start a session</Link>
+        </Button>
+      </div>
+    )
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center text-muted-foreground">
+        Loading summary…
+      </div>
+    )
+  }
+
+  if (!summary) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4">
+        <p className="text-muted-foreground text-center max-w-md">
+          No summary yet. End your lecture from the live page to generate a final study guide.
+        </p>
+        <Button asChild>
+          <Link href={sessionId ? `/live?sessionId=${sessionId}` : "/live"}>Back to live</Link>
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
