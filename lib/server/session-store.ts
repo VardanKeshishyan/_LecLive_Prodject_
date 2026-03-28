@@ -5,14 +5,18 @@ import type {
   PublicSession,
   SavedChunkNote,
   SessionMeta,
+  SessionPreferences,
   SessionStatus,
   SessionSummary,
+  UploadedMaterial,
 } from "@/lib/types"
 
 /** Internal session state (server only) */
 export interface InternalSessionState {
   id: string
   meta: SessionMeta
+  preferences: SessionPreferences
+  materials: UploadedMaterial[]
   createdAt: string
   sessionStartMs: number
   status: SessionStatus
@@ -44,12 +48,18 @@ const store =
   globalStore.__lectureSessionStore__ ??
   (globalStore.__lectureSessionStore__ = new Map<string, InternalSessionState>())
 
-export function createSession(meta: SessionMeta): InternalSessionState {
+export function createSession(
+  meta: SessionMeta,
+  preferences: SessionPreferences,
+  materials: UploadedMaterial[]
+): InternalSessionState {
   const id = randomUUID()
   const now = Date.now()
   const state: InternalSessionState = {
     id,
     meta,
+    preferences,
+    materials,
     createdAt: new Date(now).toISOString(),
     sessionStartMs: now,
     status: "live",
@@ -133,6 +143,8 @@ export function toPublicSession(state: InternalSessionState): PublicSession {
   return {
     id: state.id,
     meta: state.meta,
+    preferences: state.preferences,
+    materials: state.materials,
     createdAt: state.createdAt,
     sessionStartMs: state.sessionStartMs,
     status: state.status,

@@ -1,6 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import {
+  type ChangeEvent,
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -8,6 +16,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Navbar } from "@/components/navbar"
+import type {
+  NoteDetailLevel,
+  ReadingMode,
+  SessionPreferences,
+  SimplificationMode,
+  TextSizePreference,
+  UploadedMaterial,
+} from "@/lib/types"
 import {
   Mic,
   Upload,
@@ -18,29 +34,312 @@ import {
   Settings,
   ChevronRight,
   ArrowLeft,
-  Sparkles
+  Sparkles,
+  RefreshCw,
+  X,
+  FileUp,
 } from "lucide-react"
+
+const SETUP_STORAGE_KEY = "lectureSessionSetup"
+const MATERIAL_TEXT_LIMIT = 6_000
+
+type MicStatus = "idle" | "testing" | "ready" | "error"
+
+interface StoredSetup {
+  lectureTitle: string
+  courseName: string
+  instructorName: string
+  uploadedFiles: UploadedMaterial[]
+  preferences: SessionPreferences
+}
+
+interface MicrophoneOption {
+  deviceId: string
+  label: string
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function buildMaterialId(file: File): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID()
+  }
+  return `${file.name}-${file.size}-${Date.now()}`
+}
+
+async function extractMaterialText(file: File): Promise<string | undefined> {
+  const lowerName = file.name.toLowerCase()
+  const isPlainText =
+    file.type.startsWith("text/") ||
+    lowerName.endsWith(".txt") ||
+    lowerName.endsWith(".md") ||
+    lowerName.endsWith(".csv") ||
+    lowerName.endsWith(".json")
+
+  if (!isPlainText) return undefined
+
+  try {
+    const text = await file.text()
+    const trimmed = text.trim()
+    return trimmed ? trimmed.slice(0, MATERIAL_TEXT_LIMIT) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function toUploadedMaterial(file: File): Promise<UploadedMaterial> {
+  return {
+    id: buildMaterialId(file),
+    name: file.name,
+    type: file.type || "application/octet-stream",
+    size: file.size,
+    textContent: await extractMaterialText(file),
+  }
+}
+
+function dedupeMaterials(files: UploadedMaterial[]): UploadedMaterial[] {
+  const map = new Map<string, UploadedMaterial>()
+  for (const file of files) {
+    map.set(`${file.name}-${file.size}-${file.type}`, file)
+  }
+  return Array.from(map.values())
+}
+
+function textSizeToPixels(size: TextSizePreference): number {
+  switch (size) {
+    case "small":
+      return 14
+    case "large":
+      return 18
+    case "extra-large":
+      return 20
+    default:
+      return 16
+  }
+}
 
 export default function SessionSetupPage() {
   const router = useRouter()
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
   const [lectureTitle, setLectureTitle] = useState("")
   const [courseName, setCourseName] = useState("")
   const [instructorName, setInstructorName] = useState("")
-  const [uploadedFiles, setUploadedFiles] = useState<string[]>([])
-  const [micStatus, setMicStatus] = useState<"idle" | "testing" | "ready">("idle")
-  const [noteDetail, setNoteDetail] = useState("standard")
-  const [readingMode, setReadingMode] = useState("key-points")
-  const [simplification, setSimplification] = useState("standard")
-  const [textSize, setTextSize] = useState("medium")
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedMaterial[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+
+  const [microphones, setMicrophones] = useState<MicrophoneOption[]>([])
+  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState("")
+  const [selectedMicrophoneLabel, setSelectedMicrophoneLabel] = useState("Default Microphone")
+  const [micStatus, setMicStatus] = useState<MicStatus>("idle")
+  const [micMessage, setMicMessage] = useState("Pick a microphone and run a quick mic test.")
+  const [micLevel, setMicLevel] = useState(0)
+
+  const [noteDetail, setNoteDetail] = useState<NoteDetailLevel>("standard")
+  const [readingMode, setReadingMode] = useState<ReadingMode>("key-points")
+  const [simplification, setSimplification] = useState<SimplificationMode>("standard")
+  const [textSize, setTextSize] = useState<TextSizePreference>("medium")
   const [highContrast, setHighContrast] = useState(false)
 
-  const handleFileUpload = () => {
-    setUploadedFiles(["lecture-slides.pdf"])
+  const preferences = useMemo<SessionPreferences>(
+    () => ({
+      noteDetail,
+      readingMode,
+      simplification,
+      textSize,
+      highContrast,
+      microphoneDeviceId: selectedMicrophoneId || undefined,
+      microphoneLabel: selectedMicrophoneLabel,
+      microphoneReady: micStatus === "ready",
+    }),
+    [
+      highContrast,
+      micStatus,
+      noteDetail,
+      readingMode,
+      selectedMicrophoneId,
+      selectedMicrophoneLabel,
+      simplification,
+      textSize,
+    ]
+  )
+
+  const refreshMicrophones = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const nextMicrophones = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${index + 1}`,
+        }))
+
+      setMicrophones(nextMicrophones)
+
+      if (selectedMicrophoneId) {
+        const active = nextMicrophones.find((device) => device.deviceId === selectedMicrophoneId)
+        if (active) setSelectedMicrophoneLabel(active.label)
+      }
+    } catch {
+      setMicMessage("Browser blocked device detection. You can still start with the default mic.")
+    }
+  }, [selectedMicrophoneId])
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SETUP_STORAGE_KEY)
+      if (raw) {
+        const stored = JSON.parse(raw) as Partial<StoredSetup>
+        if (typeof stored.lectureTitle === "string") setLectureTitle(stored.lectureTitle)
+        if (typeof stored.courseName === "string") setCourseName(stored.courseName)
+        if (typeof stored.instructorName === "string") setInstructorName(stored.instructorName)
+        if (Array.isArray(stored.uploadedFiles)) setUploadedFiles(stored.uploadedFiles)
+
+        if (stored.preferences) {
+          setNoteDetail(stored.preferences.noteDetail ?? "standard")
+          setReadingMode(stored.preferences.readingMode ?? "key-points")
+          setSimplification(stored.preferences.simplification ?? "standard")
+          setTextSize(stored.preferences.textSize ?? "medium")
+          setHighContrast(Boolean(stored.preferences.highContrast))
+          setSelectedMicrophoneId(stored.preferences.microphoneDeviceId ?? "")
+          setSelectedMicrophoneLabel(stored.preferences.microphoneLabel ?? "Default Microphone")
+          if (stored.preferences.microphoneReady) {
+            setMicStatus("ready")
+            setMicMessage("Previously tested microphone is ready.")
+          }
+        }
+      }
+    } catch {
+      /* ignore invalid setup cache */
+    }
+
+    void refreshMicrophones()
+
+    if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", refreshMicrophones)
+      return () => navigator.mediaDevices.removeEventListener("devicechange", refreshMicrophones)
+    }
+  }, [refreshMicrophones])
+
+  useEffect(() => {
+    const snapshot: StoredSetup = {
+      lectureTitle,
+      courseName,
+      instructorName,
+      uploadedFiles,
+      preferences,
+    }
+    try {
+      sessionStorage.setItem(SETUP_STORAGE_KEY, JSON.stringify(snapshot))
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [courseName, instructorName, lectureTitle, preferences, uploadedFiles])
+
+  const handleFiles = useCallback(async (files: FileList | File[] | null) => {
+    if (!files || files.length === 0) return
+    const materials = await Promise.all(Array.from(files).map((file) => toUploadedMaterial(file)))
+    setUploadedFiles((prev) => dedupeMaterials([...prev, ...materials]))
+  }, [])
+
+  const openFilePicker = () => {
+    fileInputRef.current?.click()
   }
 
-  const testMicrophone = () => {
+  const onFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    await handleFiles(event.target.files)
+    event.target.value = ""
+  }
+
+  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setIsDragging(false)
+    await handleFiles(event.dataTransfer.files)
+  }
+
+  const removeUploadedFile = (id: string) => {
+    setUploadedFiles((prev) => prev.filter((file) => file.id !== id))
+  }
+
+  const testMicrophone = async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setMicStatus("error")
+      setMicMessage("Microphone testing is not supported in this browser.")
+      return
+    }
+
     setMicStatus("testing")
-    setTimeout(() => setMicStatus("ready"), 1500)
+    setMicMessage("Listening for microphone input...")
+    setMicLevel(0)
+
+    let stream: MediaStream | null = null
+    let audioContext: AudioContext | null = null
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          ...(selectedMicrophoneId ? { deviceId: { exact: selectedMicrophoneId } } : {}),
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      })
+
+      await refreshMicrophones()
+
+      const activeTrack = stream.getAudioTracks()[0]
+      if (activeTrack?.label) setSelectedMicrophoneLabel(activeTrack.label)
+
+      audioContext = new AudioContext()
+      const source = audioContext.createMediaStreamSource(stream)
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      source.connect(analyser)
+
+      const data = new Uint8Array(analyser.fftSize)
+      let peak = 0
+      const startAt = performance.now()
+
+      await new Promise<void>((resolve) => {
+        const sample = () => {
+          analyser.getByteTimeDomainData(data)
+          let total = 0
+          for (let i = 0; i < data.length; i++) {
+            total += Math.abs(data[i] - 128)
+          }
+          const normalized = total / data.length / 128
+          peak = Math.max(peak, normalized)
+          setMicLevel(Math.min(100, Math.round(normalized * 500)))
+
+          if (performance.now() - startAt >= 1500) {
+            resolve()
+            return
+          }
+          requestAnimationFrame(sample)
+        }
+
+        sample()
+      })
+
+      setMicStatus("ready")
+      setMicMessage(
+        peak > 0.03
+          ? "Microphone connected and picking up sound."
+          : "Microphone connected. Input level is low, so speak closer if needed."
+      )
+    } catch {
+      setMicStatus("error")
+      setMicMessage("Microphone test failed. Check browser permission or pick another device.")
+      setMicLevel(0)
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop())
+      if (audioContext) void audioContext.close()
+    }
   }
 
   const startSession = async () => {
@@ -49,9 +348,11 @@ export default function SessionSetupPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: lectureTitle,
-          course: courseName,
-          instructor: instructorName,
+          title: lectureTitle.trim(),
+          course: courseName.trim(),
+          instructor: instructorName.trim(),
+          preferences,
+          materials: uploadedFiles,
         }),
       })
       if (!res.ok) {
@@ -66,18 +367,22 @@ export default function SessionSetupPage() {
     }
   }
 
+  const materialContextLabel =
+    uploadedFiles.length === 0
+      ? "No lecture materials attached yet."
+      : `${uploadedFiles.length} material${uploadedFiles.length === 1 ? "" : "s"} ready for this session.`
+
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
-      {/* Subtle ambient orb */}
-      <div className="fixed top-[-10%] right-[-5%] w-[400px] h-[400px] rounded-full opacity-[0.04] pointer-events-none"
-        style={{ background: 'radial-gradient(circle, oklch(0.72 0.19 165), transparent 70%)' }}
+      <div
+        className="fixed top-[-10%] right-[-5%] w-[400px] h-[400px] rounded-full opacity-[0.04] pointer-events-none"
+        style={{ background: "radial-gradient(circle, oklch(0.72 0.19 165), transparent 70%)" }}
       />
 
       <Navbar />
 
       <main className="pt-24 pb-12 px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="mx-auto max-w-6xl">
-          {/* Header */}
           <div className="mb-10 animate-fade-in-up">
             <Link
               href="/"
@@ -94,23 +399,19 @@ export default function SessionSetupPage() {
               Configure Your <span className="text-gradient-primary">Lecture Session</span>
             </h1>
             <p className="text-lg text-muted-foreground">
-              Upload materials and choose your accessibility preferences before class begins.
+              Upload materials, choose the microphone, and set how notes should be written before class begins.
             </p>
           </div>
 
           <div className="grid lg:grid-cols-3 gap-8">
-            {/* Main Setup Form */}
             <div className="lg:col-span-2 space-y-6">
-              {/* Session Info */}
               <Card className="card-futuristic animate-fade-in-up-delay-1">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <FileText className="h-5 w-5 text-primary" />
                     Session Information
                   </CardTitle>
-                  <CardDescription>
-                    Enter details about this lecture session
-                  </CardDescription>
+                  <CardDescription>Enter details about this lecture session</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
@@ -148,7 +449,6 @@ export default function SessionSetupPage() {
                 </CardContent>
               </Card>
 
-              {/* Upload Slides */}
               <Card className="card-futuristic animate-fade-in-up-delay-2">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -156,41 +456,104 @@ export default function SessionSetupPage() {
                     Upload Lecture Materials
                   </CardTitle>
                   <CardDescription>
-                    Upload slides or materials for better note accuracy
+                    Attach slides or supporting files so they stay visible throughout the session.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.ppt,.pptx,.png,.jpg,.jpeg,.gif,.webp,.txt,.md,.csv,.json"
+                    multiple
+                    className="hidden"
+                    onChange={onFileInputChange}
+                  />
+
                   <div
-                    onClick={handleFileUpload}
-                    className="border-2 border-dashed border-border/50 rounded-2xl p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-all duration-300 group"
+                    role="button"
+                    tabIndex={0}
+                    onClick={openFilePicker}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault()
+                        openFilePicker()
+                      }
+                    }}
+                    onDragEnter={(event) => {
+                      event.preventDefault()
+                      setIsDragging(true)
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault()
+                      setIsDragging(false)
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={onDrop}
+                    className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-300 group ${
+                      isDragging
+                        ? "border-primary/60 bg-primary/10"
+                        : "border-border/50 hover:border-primary/50 hover:bg-primary/5"
+                    }`}
                   >
                     <div className="flex justify-center gap-4 mb-4">
                       {[Presentation, FileText, ImageIcon].map((Icon, i) => (
-                        <div key={i} className="h-12 w-12 rounded-xl bg-secondary/50 border border-border/30 flex items-center justify-center group-hover:border-primary/30 transition-colors">
+                        <div
+                          key={i}
+                          className="h-12 w-12 rounded-xl bg-secondary/50 border border-border/30 flex items-center justify-center group-hover:border-primary/30 transition-colors"
+                        >
                           <Icon className="h-6 w-6 text-muted-foreground group-hover:text-primary transition-colors" />
                         </div>
                       ))}
                     </div>
-                    <p className="text-foreground font-medium mb-1">
-                      Drop files here or click to upload
+                    <p className="text-foreground font-medium mb-1">Drop files here or click to upload</p>
+                    <p className="text-sm text-muted-foreground">Supports PDF, PPT, PPTX, images, and text notes</p>
+                    <p className="text-xs text-primary/80 mt-3">
+                      Uploaded materials are carried into the live session and used as extra context when possible.
                     </p>
-                    <p className="text-sm text-muted-foreground">
-                      Supports PDF, PPT, PPTX, and images
-                    </p>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+                    <p className="text-sm text-muted-foreground">{materialContextLabel}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                      onClick={openFilePicker}
+                    >
+                      <FileUp className="mr-2 h-4 w-4" />
+                      Add Files
+                    </Button>
                   </div>
 
                   {uploadedFiles.length > 0 && (
                     <div className="mt-4 space-y-2">
-                      {uploadedFiles.map((file, index) => (
+                      {uploadedFiles.map((file) => (
                         <div
-                          key={index}
-                          className="flex items-center justify-between p-3 rounded-xl bg-primary/5 border border-primary/20"
+                          key={file.id}
+                          className="flex items-center justify-between gap-3 p-3 rounded-xl bg-primary/5 border border-primary/20"
                         >
-                          <div className="flex items-center gap-3">
-                            <FileText className="h-5 w-5 text-primary" />
-                            <span className="text-sm text-foreground">{file}</span>
+                          <div className="flex items-center gap-3 min-w-0">
+                            <FileText className="h-5 w-5 text-primary flex-shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-sm text-foreground truncate">{file.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatBytes(file.size)}
+                                {file.textContent ? " · text context attached" : " · available during session"}
+                              </p>
+                            </div>
                           </div>
-                          <CheckCircle2 className="h-5 w-5 text-primary" />
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="h-5 w-5 text-primary" />
+                            <button
+                              type="button"
+                              onClick={() => removeUploadedFile(file.id)}
+                              className="h-8 w-8 rounded-lg border border-border/40 bg-background/40 hover:border-destructive/40 hover:bg-destructive/10 transition-colors flex items-center justify-center"
+                              aria-label={`Remove ${file.name}`}
+                            >
+                              <X className="h-4 w-4 text-muted-foreground" />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -198,36 +561,58 @@ export default function SessionSetupPage() {
                 </CardContent>
               </Card>
 
-              {/* Audio Input */}
               <Card className="card-futuristic animate-fade-in-up-delay-3">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Mic className="h-5 w-5 text-primary" />
                     Audio Input
                   </CardTitle>
-                  <CardDescription>
-                    Configure your microphone for live transcription
-                  </CardDescription>
+                  <CardDescription>Pick the microphone that should feed the live transcript.</CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="space-y-4">
                   <div className="flex flex-col sm:flex-row gap-4">
                     <div className="flex-1">
-                      <Label htmlFor="mic-select" className="mb-2 block">Select Microphone</Label>
+                      <Label htmlFor="mic-select" className="mb-2 block">
+                        Select Microphone
+                      </Label>
                       <select
                         id="mic-select"
+                        value={selectedMicrophoneId}
+                        onChange={(event) => {
+                          const deviceId = event.target.value
+                          const option = microphones.find((item) => item.deviceId === deviceId)
+                          setSelectedMicrophoneId(deviceId)
+                          setSelectedMicrophoneLabel(option?.label || "Default Microphone")
+                          setMicStatus("idle")
+                          setMicMessage("Microphone changed. Run the test again to confirm input.")
+                        }}
                         className="w-full h-10 px-3 rounded-xl bg-secondary/50 border border-border/50 text-foreground focus:border-primary/50 outline-none transition-colors"
                       >
-                        <option>Default Microphone</option>
-                        <option>Built-in Microphone</option>
-                        <option>External USB Microphone</option>
+                        <option value="">Default Microphone</option>
+                        {microphones.map((device) => (
+                          <option key={device.deviceId} value={device.deviceId}>
+                            {device.label}
+                          </option>
+                        ))}
                       </select>
                     </div>
-                    <div className="flex items-end">
+
+                    <div className="flex items-end gap-2">
                       <Button
+                        type="button"
                         variant="outline"
-                        onClick={testMicrophone}
+                        onClick={() => void refreshMicrophones()}
+                        className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+                      >
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        Refresh
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void testMicrophone()}
                         disabled={micStatus === "testing"}
-                        className="border-border/50 hover:border-primary/40"
+                        className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
                       >
                         {micStatus === "testing" ? (
                           "Testing..."
@@ -246,18 +631,30 @@ export default function SessionSetupPage() {
                     </div>
                   </div>
 
-                  {micStatus === "ready" && (
-                    <div className="mt-4 p-3 rounded-xl bg-primary/10 border border-primary/20">
-                      <div className="flex items-center gap-2 text-primary">
-                        <CheckCircle2 className="h-4 w-4" />
-                        <span className="text-sm font-medium">Microphone connected and ready to listen</span>
+                  <div className="rounded-xl bg-secondary/40 border border-border/30 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">{selectedMicrophoneLabel}</p>
+                        <p className="text-xs text-muted-foreground">{micMessage}</p>
                       </div>
+                      {micStatus === "ready" && <CheckCircle2 className="h-5 w-5 text-primary flex-shrink-0" />}
                     </div>
-                  )}
+                    <div className="h-2 rounded-full bg-background/60 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          micStatus === "error"
+                            ? "bg-destructive"
+                            : micStatus === "ready"
+                              ? "bg-primary"
+                              : "bg-muted-foreground/40"
+                        }`}
+                        style={{ width: `${Math.max(micLevel, micStatus === "ready" ? 24 : 8)}%` }}
+                      />
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
-              {/* Accessibility Preferences */}
               <Card className="card-futuristic animate-fade-in-up-delay-4">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -265,7 +662,7 @@ export default function SessionSetupPage() {
                     Accessibility Preferences
                   </CardTitle>
                   <CardDescription>
-                    Customize how notes are generated and displayed
+                    These choices now carry into the live note view and AI note generation.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
@@ -273,13 +670,15 @@ export default function SessionSetupPage() {
                     <div className="space-y-2">
                       <Label>Note Detail Level</Label>
                       <div className="flex flex-col gap-2">
-                        {["brief", "standard", "detailed"].map((level) => (
+                        {(["brief", "standard", "detailed"] as NoteDetailLevel[]).map((level) => (
                           <button
                             key={level}
+                            type="button"
+                            aria-pressed={noteDetail === level}
                             onClick={() => setNoteDetail(level)}
                             className={`px-4 py-2.5 rounded-xl text-left text-sm transition-all duration-200 border ${
                               noteDetail === level
-                                ? "bg-primary/15 border-primary/30 text-primary"
+                                ? "bg-primary/15 border-primary/30 text-primary glow-primary"
                                 : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20 hover:bg-secondary"
                             }`}
                           >
@@ -294,14 +693,16 @@ export default function SessionSetupPage() {
                       <div className="flex flex-col gap-2">
                         {[
                           { value: "key-points", label: "Key Points Only" },
-                          { value: "everything", label: "Read Everything" }
+                          { value: "everything", label: "Read Everything" },
                         ].map((mode) => (
                           <button
                             key={mode.value}
-                            onClick={() => setReadingMode(mode.value)}
+                            type="button"
+                            aria-pressed={readingMode === mode.value}
+                            onClick={() => setReadingMode(mode.value as ReadingMode)}
                             className={`px-4 py-2.5 rounded-xl text-left text-sm transition-all duration-200 border ${
                               readingMode === mode.value
-                                ? "bg-primary/15 border-primary/30 text-primary"
+                                ? "bg-primary/15 border-primary/30 text-primary glow-primary"
                                 : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20 hover:bg-secondary"
                             }`}
                           >
@@ -316,14 +717,16 @@ export default function SessionSetupPage() {
                       <div className="flex flex-col gap-2">
                         {[
                           { value: "standard", label: "Standard Language" },
-                          { value: "simplified", label: "Easier Wording" }
+                          { value: "simplified", label: "Easier Wording" },
                         ].map((mode) => (
                           <button
                             key={mode.value}
-                            onClick={() => setSimplification(mode.value)}
+                            type="button"
+                            aria-pressed={simplification === mode.value}
+                            onClick={() => setSimplification(mode.value as SimplificationMode)}
                             className={`px-4 py-2.5 rounded-xl text-left text-sm transition-all duration-200 border ${
                               simplification === mode.value
-                                ? "bg-primary/15 border-primary/30 text-primary"
+                                ? "bg-primary/15 border-primary/30 text-primary glow-primary"
                                 : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20 hover:bg-secondary"
                             }`}
                           >
@@ -336,17 +739,19 @@ export default function SessionSetupPage() {
                     <div className="space-y-2">
                       <Label>Text Size</Label>
                       <div className="flex flex-col gap-2">
-                        {["small", "medium", "large", "extra-large"].map((size) => (
+                        {(["small", "medium", "large", "extra-large"] as TextSizePreference[]).map((size) => (
                           <button
                             key={size}
+                            type="button"
+                            aria-pressed={textSize === size}
                             onClick={() => setTextSize(size)}
                             className={`px-4 py-2.5 rounded-xl text-left text-sm transition-all duration-200 border ${
                               textSize === size
-                                ? "bg-primary/15 border-primary/30 text-primary"
+                                ? "bg-primary/15 border-primary/30 text-primary glow-primary"
                                 : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20 hover:bg-secondary"
                             }`}
                           >
-                            {size.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                            {size.split("-").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")}
                           </button>
                         ))}
                       </div>
@@ -355,16 +760,21 @@ export default function SessionSetupPage() {
 
                   <div className="pt-4 border-t border-border/30">
                     <button
-                      onClick={() => setHighContrast(!highContrast)}
+                      type="button"
+                      onClick={() => setHighContrast((prev) => !prev)}
                       className={`w-full px-4 py-3 rounded-xl flex items-center justify-between transition-all duration-200 border ${
                         highContrast
-                          ? "bg-primary/15 border-primary/30 text-primary"
+                          ? "bg-primary/15 border-primary/30 text-primary glow-primary"
                           : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20"
                       }`}
                     >
                       <span className="font-medium">High Contrast Mode</span>
                       <div className={`h-6 w-11 rounded-full transition-colors ${highContrast ? "bg-primary" : "bg-muted"}`}>
-                        <div className={`h-5 w-5 rounded-full bg-background transition-transform mt-0.5 shadow-sm ${highContrast ? "translate-x-5 ml-0.5" : "translate-x-0.5"}`} />
+                        <div
+                          className={`h-5 w-5 rounded-full bg-background transition-transform mt-0.5 shadow-sm ${
+                            highContrast ? "translate-x-5 ml-0.5" : "translate-x-0.5"
+                          }`}
+                        />
                       </div>
                     </button>
                   </div>
@@ -372,7 +782,6 @@ export default function SessionSetupPage() {
               </Card>
             </div>
 
-            {/* Sidebar Preview */}
             <div className="lg:col-span-1">
               <div className="sticky top-24">
                 <Card className="card-futuristic animate-fade-in-up-delay-2">
@@ -389,8 +798,11 @@ export default function SessionSetupPage() {
                           <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-accent/5" />
                           <Presentation className="h-8 w-8 text-muted-foreground/30" />
                         </div>
-                        <p className="text-sm text-foreground font-medium truncate">
-                          {uploadedFiles[0]}
+                        <p className="text-sm text-foreground font-medium truncate">{uploadedFiles[0]?.name}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {uploadedFiles.length === 1
+                            ? "1 material attached"
+                            : `${uploadedFiles.length} materials attached`}
                         </p>
                       </div>
                     )}
@@ -401,31 +813,37 @@ export default function SessionSetupPage() {
                         { label: "Course", value: courseName || "Not set" },
                         { label: "Instructor", value: instructorName || "Not set" },
                         { label: "Detail Level", value: noteDetail },
-                        { label: "Microphone", value: micStatus === "ready" ? "Ready" : "Not tested", highlight: micStatus === "ready" }
+                        { label: "Reading", value: readingMode === "key-points" ? "Key Points" : "Everything" },
+                        { label: "Language", value: simplification === "simplified" ? "Easier wording" : "Standard wording" },
+                        { label: "Text Size", value: `${textSize} (${textSizeToPixels(textSize)}px)` },
+                        { label: "Contrast", value: highContrast ? "High" : "Normal" },
+                        {
+                          label: "Microphone",
+                          value: micStatus === "ready" ? selectedMicrophoneLabel : "Needs test",
+                          highlight: micStatus === "ready",
+                        },
                       ].map((item) => (
-                        <div key={item.label} className="flex justify-between text-sm">
+                        <div key={item.label} className="flex justify-between gap-3 text-sm">
                           <span className="text-muted-foreground">{item.label}</span>
-                          <span className={`font-medium truncate max-w-[120px] capitalize ${item.highlight ? "text-primary" : "text-foreground"}`}>
+                          <span
+                            className={`font-medium truncate max-w-[150px] capitalize text-right ${
+                              item.highlight ? "text-primary" : "text-foreground"
+                            }`}
+                          >
                             {item.value}
                           </span>
                         </div>
                       ))}
                     </div>
 
-                    {micStatus === "ready" && (
-                      <div className="p-3 rounded-xl bg-primary/10 border border-primary/20">
-                        <div className="flex items-center gap-2 text-primary">
-                          <CheckCircle2 className="h-4 w-4" />
-                          <span className="text-sm font-medium">Session Ready</span>
-                        </div>
-                      </div>
-                    )}
+                    <div className="p-3 rounded-xl bg-primary/10 border border-primary/20">
+                      <p className="text-sm text-primary font-medium">What will carry into the session</p>
+                      <p className="text-xs text-foreground/80 mt-1">
+                        Material list, microphone choice, text size, contrast, and note-generation preferences.
+                      </p>
+                    </div>
 
-                    <Button
-                      className="w-full glow-primary group"
-                      size="lg"
-                      onClick={startSession}
-                    >
+                    <Button className="w-full glow-primary group" size="lg" onClick={startSession} disabled={micStatus === "testing"}>
                       Start Live Session
                       <ChevronRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                     </Button>

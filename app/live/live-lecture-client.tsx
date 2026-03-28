@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { startPcmStreaming, type PcmStreamHandle } from "@/lib/client/pcm-stream"
-import type { PublicSession, SavedChunkNote } from "@/lib/types"
+import type { PublicSession, SavedChunkNote, SessionPreferences, TextSizePreference } from "@/lib/types"
 import {
   Mic,
   MicOff,
@@ -30,6 +30,7 @@ import {
   Sun,
   Moon,
   Zap,
+  FileText,
 } from "lucide-react"
 
 function formatClock(totalSec: number): string {
@@ -40,6 +41,35 @@ function formatClock(totalSec: number): string {
 
 function formatRange(startSec: number, endSec: number): string {
   return `${formatClock(startSec)}–${formatClock(endSec)}`
+}
+
+function textSizeFromPreference(size?: TextSizePreference): number {
+  switch (size) {
+    case "small":
+      return 14
+    case "large":
+      return 18
+    case "extra-large":
+      return 20
+    default:
+      return 16
+  }
+}
+
+function summarizeSessionPreferences(preferences?: SessionPreferences): string {
+  if (!preferences) return "Notes emphasize ideas, terms, and exam-relevant signals—not raw transcript."
+
+  const parts = [
+    preferences.noteDetail === "brief"
+      ? "brief note blocks"
+      : preferences.noteDetail === "detailed"
+        ? "detailed note blocks"
+        : "balanced note blocks",
+    preferences.readingMode === "everything" ? "full reading mode" : "key-points mode",
+    preferences.simplification === "simplified" ? "easier wording" : "standard wording",
+  ]
+
+  return `Session is using ${parts.join(", ")}.`
 }
 
 type SessionMarkKind = "confusion" | "bookmark"
@@ -69,6 +99,7 @@ export function LiveLectureClient() {
   const [elapsedTime, setElapsedTime] = useState(0)
   const [textSize, setTextSize] = useState(16)
   const [highContrast, setHighContrast] = useState(false)
+  const [preferredMicrophoneId, setPreferredMicrophoneId] = useState("")
   const [currentSlide, setCurrentSlide] = useState(8)
   const [marks, setMarks] = useState<SessionMark[]>([])
   const [lastMarkLabel, setLastMarkLabel] = useState("")
@@ -87,6 +118,7 @@ export function LiveLectureClient() {
   const speechFinalRef = useRef("")
   const shouldRunSpeechRef = useRef(false)
   const pausedRef = useRef(isPaused)
+  const appliedSessionPreferencesRef = useRef(false)
   pausedRef.current = isPaused
 
   const resetMissingSession = () => {
@@ -109,6 +141,18 @@ export function LiveLectureClient() {
     }
     setSessionId(id)
     sessionStorage.setItem("lectureSessionId", id)
+
+    try {
+      const raw = sessionStorage.getItem("lectureSessionSetup")
+      if (!raw) return
+      const stored = JSON.parse(raw) as { preferences?: SessionPreferences }
+      if (!stored.preferences) return
+      setPreferredMicrophoneId(stored.preferences.microphoneDeviceId ?? "")
+      setTextSize(textSizeFromPreference(stored.preferences.textSize))
+      setHighContrast(Boolean(stored.preferences.highContrast))
+    } catch {
+      /* ignore setup hydration errors */
+    }
   }, [router, searchParams])
 
   useEffect(() => {
@@ -125,6 +169,12 @@ export function LiveLectureClient() {
     setSpokenText(pub.spokenText)
     setRollingText(pub.rollingText)
     setSavedChunks(pub.savedChunks)
+    if (!appliedSessionPreferencesRef.current) {
+      setTextSize(textSizeFromPreference(pub.preferences.textSize))
+      setHighContrast(Boolean(pub.preferences.highContrast))
+      setPreferredMicrophoneId(pub.preferences.microphoneDeviceId ?? "")
+      appliedSessionPreferencesRef.current = true
+    }
     if (pub.status === "organizing") setApiStatus("Organizing notes…")
     else setApiStatus("Live")
     if (pub.lastUpdated) {
@@ -222,6 +272,7 @@ export function LiveLectureClient() {
     void (async () => {
       try {
         const handle = await startPcmStreaming(sessionId, {
+          deviceId: preferredMicrophoneId || undefined,
           shouldSend: () => !pausedRef.current && !cancelled,
           onTransportError: (e) => {
             console.error("[chunk]", e)
@@ -253,7 +304,7 @@ export function LiveLectureClient() {
       streamRef.current?.stop()
       streamRef.current = null
     }
-  }, [sessionId, isRecording, mergeChunkResponse])
+  }, [sessionId, isRecording, mergeChunkResponse, preferredMicrophoneId])
 
   useEffect(() => {
     if (!sessionId) return
@@ -465,6 +516,18 @@ export function LiveLectureClient() {
   }
 
   const lectureTitle = session?.meta.title || "Live lecture"
+  const showExpandedNoteDetails = session?.preferences.readingMode === "everything"
+  const sessionMaterials = session?.materials ?? []
+  const materialCount = sessionMaterials.length
+  const visibleMaterialIndex =
+    materialCount > 0 ? Math.min(Math.max(currentSlide, 1), materialCount) : currentSlide
+  const selectedMaterial = sessionMaterials[Math.max(visibleMaterialIndex - 1, 0)]
+  const micLabel = session?.preferences.microphoneLabel || "Default Microphone"
+
+  useEffect(() => {
+    if (materialCount === 0) return
+    setCurrentSlide((prev) => (prev >= 1 && prev <= materialCount ? prev : 1))
+  }, [materialCount])
 
   return (
     <div className={`min-h-screen bg-background ${highContrast ? "contrast-125" : ""}`}>
@@ -553,21 +616,34 @@ export function LiveLectureClient() {
                 <CardContent>
                   <div className="aspect-video bg-secondary/50 rounded-xl mb-3 flex items-center justify-center relative overflow-hidden border border-border/30">
                     <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-accent/5" />
-                    <div className="text-center z-10">
-                      <Presentation className="h-10 w-10 text-muted-foreground/20 mx-auto mb-2" />
-                      <p className="text-xs text-muted-foreground/60">Slide Preview</p>
-                    </div>
+                    {selectedMaterial ? (
+                      <div className="text-center z-10 px-4">
+                        <FileText className="h-10 w-10 text-primary/50 mx-auto mb-2" />
+                        <p className="text-sm text-foreground font-medium line-clamp-2">
+                          {selectedMaterial.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">Uploaded session material</p>
+                      </div>
+                    ) : (
+                      <div className="text-center z-10">
+                        <Presentation className="h-10 w-10 text-muted-foreground/20 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground/60">No uploaded materials yet</p>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">
-                      Slide {currentSlide} of 24
+                      {selectedMaterial
+                        ? `Material ${visibleMaterialIndex} of ${materialCount}`
+                        : "Upload materials from setup to keep them visible here"}
                     </span>
                     <div className="flex gap-1">
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-7 w-7 p-0"
-                        onClick={() => setCurrentSlide(Math.max(1, currentSlide - 1))}
+                        disabled={materialCount === 0}
+                        onClick={() => setCurrentSlide(Math.max(1, visibleMaterialIndex - 1))}
                       >
                         <ChevronRight className="h-3.5 w-3.5 rotate-180" />
                       </Button>
@@ -575,7 +651,8 @@ export function LiveLectureClient() {
                         variant="ghost"
                         size="sm"
                         className="h-7 w-7 p-0"
-                        onClick={() => setCurrentSlide(Math.min(24, currentSlide + 1))}
+                        disabled={materialCount === 0}
+                        onClick={() => setCurrentSlide(Math.min(Math.max(materialCount, 1), visibleMaterialIndex + 1))}
                       >
                         <ChevronRight className="h-3.5 w-3.5" />
                       </Button>
@@ -593,9 +670,37 @@ export function LiveLectureClient() {
                 </CardHeader>
                 <CardContent>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    {session?.fallbackNote ||
-                      "Notes emphasize ideas, terms, and exam-relevant signals—not raw transcript."}
+                    {session?.fallbackNote || summarizeSessionPreferences(session?.preferences)}
                   </p>
+                  <div className="mt-3 space-y-1.5">
+                    <div className="text-xs text-foreground/80 flex justify-between gap-2">
+                      <span className="text-muted-foreground">Microphone</span>
+                      <span className="truncate text-right">{micLabel}</span>
+                    </div>
+                    <div className="text-xs text-foreground/80 flex justify-between gap-2">
+                      <span className="text-muted-foreground">Reading mode</span>
+                      <span>{showExpandedNoteDetails ? "Everything" : "Key points"}</span>
+                    </div>
+                    <div className="text-xs text-foreground/80 flex justify-between gap-2">
+                      <span className="text-muted-foreground">Materials</span>
+                      <span>{materialCount}</span>
+                    </div>
+                  </div>
+                  {sessionMaterials.length > 0 && (
+                    <div className="mt-3 space-y-1.5">
+                      {sessionMaterials.slice(0, 3).map((material) => (
+                        <div
+                          key={material.id}
+                          className="text-xs text-foreground/80 border-l-2 border-primary/30 pl-2"
+                        >
+                          <p>{material.name}</p>
+                          <p className="text-muted-foreground">
+                            {material.textContent ? "Text context available" : "Reference attached"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {marks.length > 0 && (
                     <div className="mt-3 space-y-1.5">
                       {marks.slice(0, 3).map((mark) => (
@@ -683,7 +788,7 @@ export function LiveLectureClient() {
                             </ul>
                           </div>
                         )}
-                        {chunk.importantTerms.length > 0 && (
+                        {showExpandedNoteDetails && chunk.importantTerms.length > 0 && (
                           <div className="mb-2 flex flex-wrap gap-1.5">
                             {chunk.importantTerms.map((t, i) => (
                               <span
@@ -695,13 +800,13 @@ export function LiveLectureClient() {
                             ))}
                           </div>
                         )}
-                        {chunk.exampleOrApplication && (
+                        {showExpandedNoteDetails && chunk.exampleOrApplication && (
                           <p className="text-sm text-muted-foreground mt-2">
                             <span className="text-chart-3 font-medium">Example: </span>
                             {chunk.exampleOrApplication}
                           </p>
                         )}
-                        {(chunk.possibleQuestion || chunk.whyItMatters) && (
+                        {showExpandedNoteDetails && (chunk.possibleQuestion || chunk.whyItMatters) && (
                           <div className="mt-2 text-xs text-muted-foreground space-y-1">
                             {chunk.possibleQuestion && (
                               <p>

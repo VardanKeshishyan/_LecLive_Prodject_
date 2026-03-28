@@ -37,10 +37,44 @@ export interface SessionMeta {
   instructor?: string
 }
 
+export type NoteDetailLevel = "brief" | "standard" | "detailed"
+export type ReadingMode = "key-points" | "everything"
+export type SimplificationMode = "standard" | "simplified"
+export type TextSizePreference = "small" | "medium" | "large" | "extra-large"
+
+export interface UploadedMaterial {
+  id: string
+  name: string
+  type: string
+  size: number
+  textContent?: string
+}
+
+export interface SessionPreferences {
+  noteDetail: NoteDetailLevel
+  readingMode: ReadingMode
+  simplification: SimplificationMode
+  textSize: TextSizePreference
+  highContrast: boolean
+  microphoneDeviceId?: string
+  microphoneLabel?: string
+  microphoneReady?: boolean
+}
+
+export const DEFAULT_SESSION_PREFERENCES: SessionPreferences = {
+  noteDetail: "standard",
+  readingMode: "key-points",
+  simplification: "standard",
+  textSize: "medium",
+  highContrast: false,
+}
+
 /** Serializable session for GET /api/session/[id] and summary UI */
 export interface PublicSession {
   id: string
   meta: SessionMeta
+  preferences: SessionPreferences
+  materials: UploadedMaterial[]
   createdAt: string
   sessionStartMs: number
   status: SessionStatus

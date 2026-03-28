@@ -77,6 +77,7 @@ export function SummaryClient() {
     examTopics: true,
   })
   const speakingRef = useRef(false)
+  const sessionPreferencesAppliedRef = useRef(false)
 
   useEffect(() => {
     if (!sessionId) {
@@ -118,6 +119,14 @@ export function SummaryClient() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!session || sessionPreferencesAppliedRef.current) return
+    if (session.preferences.simplification === "simplified") {
+      setShowSimplified(true)
+    }
+    sessionPreferencesAppliedRef.current = true
+  }, [session])
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }))
@@ -315,7 +324,11 @@ export function SummaryClient() {
   }
 
   return (
-    <div className="min-h-screen bg-background relative overflow-hidden">
+    <div
+      className={`min-h-screen bg-background relative overflow-hidden ${
+        session.preferences.highContrast ? "contrast-125" : ""
+      }`}
+    >
       <div
         className="fixed bottom-[-10%] left-[-5%] w-[400px] h-[400px] rounded-full opacity-[0.04] pointer-events-none"
         style={{
@@ -365,7 +378,7 @@ export function SummaryClient() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-border/50 hover:border-primary/40"
+                  className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover-glow active:bg-primary/15"
                   onClick={async () => {
                     const shareUrl =
                       typeof window !== "undefined" ? window.location.href : ""
@@ -383,7 +396,7 @@ export function SummaryClient() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-border/50 hover:border-primary/40"
+                  className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover-glow active:bg-primary/15"
                   onClick={downloadTranscript}
                 >
                   <Download className="h-4 w-4 mr-2" />
@@ -392,7 +405,7 @@ export function SummaryClient() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-border/50 hover:border-primary/40"
+                  className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover-glow active:bg-primary/15"
                   onClick={exportSummary}
                 >
                   <Download className="h-4 w-4 mr-2" />

@@ -24,6 +24,57 @@ Your job is NOT to produce a verbatim transcript. Instead, continuously extract 
 Respond in concise text. Prefer short labeled lines when helpful (e.g. "Definition:", "Example:", "Exam tip:").
 Do not roleplay as a chatbot; output study-relevant content only.`
 
+function describeSessionPreferences(state: InternalSessionState): string {
+  const instructions: string[] = []
+
+  if (state.preferences.noteDetail === "brief") {
+    instructions.push("Keep notes compact and skimmable, with only the highest-value takeaways.")
+  } else if (state.preferences.noteDetail === "detailed") {
+    instructions.push("Capture richer detail, including supporting points and clarifying context.")
+  } else {
+    instructions.push("Balance concision with enough context to study from later.")
+  }
+
+  if (state.preferences.readingMode === "key-points") {
+    instructions.push("Prioritize key points over exhaustive detail.")
+  } else {
+    instructions.push("Include the full study picture: key points, terms, examples, and likely questions.")
+  }
+
+  if (state.preferences.simplification === "simplified") {
+    instructions.push("Prefer simpler wording and clearer explanations over academic phrasing.")
+  } else {
+    instructions.push("Use clear but standard academic wording.")
+  }
+
+  return instructions.join(" ")
+}
+
+function buildMaterialsContext(state: InternalSessionState, charLimit = 6_000): string {
+  if (state.materials.length === 0) return "No uploaded lecture materials."
+
+  let used = 0
+  const parts = state.materials.map((material, index) => {
+    const header = `${index + 1}. ${material.name} (${material.type || "unknown type"})`
+    if (!material.textContent?.trim()) return header
+
+    const remaining = Math.max(0, charLimit - used)
+    const snippet = material.textContent.slice(0, remaining)
+    used += snippet.length
+    return `${header}\nExtracted text:\n${snippet}`
+  })
+
+  return parts.join("\n\n")
+}
+
+function buildLiveInstruction(state: InternalSessionState): string {
+  return [
+    SYSTEM_INSTRUCTION,
+    `Session preferences: ${describeSessionPreferences(state)}`,
+    `Uploaded materials:\n${buildMaterialsContext(state, 2_500)}`,
+  ].join("\n\n")
+}
+
 export function isMockMode(): boolean {
   if (process.env.GEMINI_MOCK === "1") return true
   const key = process.env.GEMINI_API_KEY
@@ -156,7 +207,7 @@ export async function connectLiveSession(
       },
       systemInstruction: {
         role: "system",
-        parts: [{ text: SYSTEM_INSTRUCTION }],
+        parts: [{ text: buildLiveInstruction(state) }],
       },
     },
     callbacks: {
@@ -209,6 +260,12 @@ export async function consolidateChunk(
 
   const prompt = `You are structuring live lecture notes (not transcribing verbatim).
 
+Session preferences:
+${describeSessionPreferences(state)}
+
+Uploaded lecture materials:
+${buildMaterialsContext(state, 4_000)}
+
 Lecture context since last saved block:
 """
 ${lectureContext.slice(0, 24_000)}
@@ -225,7 +282,8 @@ exampleOrApplication (optional string),
 possibleQuestion (optional string),
 whyItMatters (optional string)
 
-If context is thin, still produce best-effort study notes from what is present.`
+If context is thin, still produce best-effort study notes from what is present.
+Honor the session preferences when choosing wording and depth.`
 
   const res = await ai.models.generateContent({
     model,
@@ -263,6 +321,12 @@ export async function finalizeSessionSummary(
     .join("\n\n")
 
   const prompt = `Synthesize a final study guide from these timed lecture note blocks and any extra context.
+
+Session preferences:
+${describeSessionPreferences(state)}
+
+Uploaded lecture materials:
+${buildMaterialsContext(state, 4_000)}
 
 Saved blocks:
 ${chunksText || "(none)"}

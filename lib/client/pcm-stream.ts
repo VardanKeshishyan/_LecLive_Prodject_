@@ -81,6 +81,7 @@ export interface PcmStreamHandle {
 export async function startPcmStreaming(
   sessionId: string,
   options: {
+    deviceId?: string
     /** Called when a chunk POST fails */
     onTransportError?: (err: unknown) => void
     /** Return false to pause sending (e.g. user paused) */
@@ -91,6 +92,7 @@ export async function startPcmStreaming(
 ): Promise<PcmStreamHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
+      ...(options.deviceId ? { deviceId: { exact: options.deviceId } } : {}),
       echoCancellation: true,
       noiseSuppression: true,
     },
