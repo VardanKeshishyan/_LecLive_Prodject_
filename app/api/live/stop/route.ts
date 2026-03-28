@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { finalizeSessionSummary } from "@/lib/server/gemini"
+import { endLiveAudioStream, finalizeSessionSummary } from "@/lib/server/gemini"
 import {
   enqueueSessionWork,
   getSession,
@@ -31,6 +31,14 @@ export async function POST(req: Request) {
 
   const payload = await enqueueSessionWork(state, async (): Promise<StopResponse> => {
     state.status = "organizing"
+
+    try {
+      if (state.liveSession) {
+        endLiveAudioStream(state.liveSession)
+      }
+    } catch (e) {
+      console.error("[stop] audio stream end", e)
+    }
 
     try {
       state.liveSession?.close()

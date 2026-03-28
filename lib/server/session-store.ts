@@ -20,6 +20,10 @@ export interface InternalSessionState {
   liveBullets: LiveBullet[]
   savedChunks: SavedChunkNote[]
   summary?: SessionSummary
+  /** Rolling text from input audio transcription (user speech only). */
+  rollingSpokenText: string
+  /** Rolling text from assistant output transcription. */
+  rollingAssistantText: string
   /** Rolling text from the Live model (study-style, not raw transcript) */
   rollingModelText: string
   /** Text accumulated since last saved chunk (for REST consolidation) */
@@ -52,6 +56,8 @@ export function createSession(meta: SessionMeta): InternalSessionState {
     lastUpdated: new Date(now).toISOString(),
     liveBullets: [],
     savedChunks: [],
+    rollingSpokenText: "",
+    rollingAssistantText: "",
     rollingModelText: "",
     bufferSinceLastChunk: "",
     lastSavedChunkAtMs: null,
@@ -86,6 +92,26 @@ export function appendRollingText(state: InternalSessionState, text: string): vo
   touch(state)
 }
 
+export function appendSpokenText(state: InternalSessionState, text: string): void {
+  if (!text.trim()) return
+  const normalized = text.trim()
+  if (state.rollingSpokenText.length > 0) {
+    state.rollingSpokenText += "\n"
+  }
+  state.rollingSpokenText += normalized
+  touch(state)
+}
+
+export function appendAssistantText(state: InternalSessionState, text: string): void {
+  if (!text.trim()) return
+  const normalized = text.trim()
+  if (state.rollingAssistantText.length > 0) {
+    state.rollingAssistantText += "\n"
+  }
+  state.rollingAssistantText += normalized
+  touch(state)
+}
+
 export function pushSavedChunk(state: InternalSessionState, chunk: SavedChunkNote): void {
   state.savedChunks.push(chunk)
   state.lastSavedChunkAtMs = Date.now()
@@ -112,6 +138,8 @@ export function toPublicSession(state: InternalSessionState): PublicSession {
     status: state.status,
     lastUpdated: state.lastUpdated,
     liveBullets: state.liveBullets,
+    spokenText: state.rollingSpokenText,
+    assistantText: state.rollingAssistantText,
     rollingText: state.rollingModelText,
     savedChunks: state.savedChunks,
     summary: state.summary,

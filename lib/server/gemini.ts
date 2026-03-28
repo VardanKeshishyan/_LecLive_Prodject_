@@ -5,7 +5,9 @@
 import { GoogleGenAI, Modality, type Session } from "@google/genai"
 import type { InternalSessionState } from "@/lib/server/session-store"
 import {
+  appendAssistantText,
   appendRollingText,
+  appendSpokenText,
   sessionElapsedSec,
   upsertLiveBulletsFromLines,
 } from "@/lib/server/session-store"
@@ -56,10 +58,12 @@ function getClient(): GoogleGenAI {
   return new GoogleGenAI({ apiKey })
 }
 
-function extractTextFromLiveMessage(msg: { text?: string }): string {
-  const direct = msg.text
-  if (direct && direct.trim()) return direct
-
+function extractTextPartsFromLiveMessage(msg: { text?: string }): {
+  directText: string
+  inputTranscript: string
+  outputTranscript: string
+  modelTurnText: string
+} {
   const liveMsg = msg as {
     serverContent?: {
       modelTurn?: {
@@ -72,19 +76,18 @@ function extractTextFromLiveMessage(msg: { text?: string }): string {
     }
   }
 
-  const inputTranscript = liveMsg.serverContent?.inputTranscription?.text
-  if (inputTranscript && inputTranscript.trim()) return inputTranscript
+  const directText = msg.text?.trim() || ""
+  const inputTranscript = liveMsg.serverContent?.inputTranscription?.text?.trim() || ""
+  const outputTranscript =
+    liveMsg.serverContent?.outputTranscription?.text?.trim() || ""
+  const modelTurnText =
+    liveMsg.serverContent?.modelTurn?.parts
+      ?.map((part) => part.text?.trim())
+      .filter((part): part is string => Boolean(part))
+      .join("\n")
+      .trim() || ""
 
-  const outputTranscript = liveMsg.serverContent?.outputTranscription?.text
-  if (outputTranscript && outputTranscript.trim()) return outputTranscript
-
-  const modelTurnText = liveMsg.serverContent?.modelTurn?.parts
-    ?.map((part) => part.text?.trim())
-    .filter((part): part is string => Boolean(part))
-    .join("\n")
-  if (modelTurnText && modelTurnText.trim()) return modelTurnText
-
-  return ""
+  return { directText, inputTranscript, outputTranscript, modelTurnText }
 }
 
 /** Parse server message and update rolling text + bullets */
@@ -92,10 +95,22 @@ export function handleLiveServerMessage(
   state: InternalSessionState,
   message: unknown
 ): void {
-  const text = extractTextFromLiveMessage(message as { text?: string })
-  if (!text) return
-  appendRollingText(state, text)
-  const lines = text
+  const { directText, inputTranscript, outputTranscript, modelTurnText } =
+    extractTextPartsFromLiveMessage(message as { text?: string })
+
+  if (inputTranscript) {
+    appendSpokenText(state, inputTranscript)
+  }
+
+  if (outputTranscript) {
+    appendAssistantText(state, outputTranscript)
+  }
+
+  const notesText = modelTurnText || outputTranscript || directText
+  if (!notesText) return
+
+  appendRollingText(state, notesText)
+  const lines = notesText
     .split(/\n+/)
     .flatMap((line) => line.split(/(?<=[.!?])\s+/))
     .map((s) => s.trim())
@@ -115,9 +130,16 @@ export async function connectLiveSession(
   const session = await ai.live.connect({
     model,
     config: {
-      responseModalities: [Modality.TEXT],
+      responseModalities: [Modality.AUDIO],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          disabled: false,
+          silenceDurationMs: 200,
+          prefixPaddingMs: 20,
+        },
+      },
       systemInstruction: {
         role: "system",
         parts: [{ text: SYSTEM_INSTRUCTION }],
@@ -149,6 +171,11 @@ export function sendLiveAudioPcm(
       mimeType: "audio/pcm;rate=16000",
     },
   })
+}
+
+/** Signal the end of a live mic stream segment so transcription can flush. */
+export function endLiveAudioStream(session: Session): void {
+  session.sendRealtimeInput({ audioStreamEnd: true })
 }
 
 export async function consolidateChunk(

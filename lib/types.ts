@@ -46,6 +46,8 @@ export interface PublicSession {
   status: SessionStatus
   lastUpdated: string
   liveBullets: LiveBullet[]
+  spokenText: string
+  assistantText: string
   rollingText: string
   savedChunks: SavedChunkNote[]
   summary?: SessionSummary

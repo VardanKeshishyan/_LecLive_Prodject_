@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { startPcmStreaming, type PcmStreamHandle } from "@/lib/client/pcm-stream"
-import type { LiveBullet, PublicSession, SavedChunkNote } from "@/lib/types"
+import type { PublicSession, SavedChunkNote } from "@/lib/types"
 import {
   Mic,
   MicOff,
@@ -49,8 +49,7 @@ export function LiveLectureClient() {
   const searchParams = useSearchParams()
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [session, setSession] = useState<PublicSession | null>(null)
-  const [liveBullets, setLiveBullets] = useState<LiveBullet[]>([])
-  const [rollingText, setRollingText] = useState("")
+  const [spokenText, setSpokenText] = useState("")
   const [savedChunks, setSavedChunks] = useState<SavedChunkNote[]>([])
   const [apiStatus, setApiStatus] = useState<string>("Live")
   const [lastUpdatedLabel, setLastUpdatedLabel] = useState<string>("")
@@ -102,8 +101,7 @@ export function LiveLectureClient() {
 
   const hydrateFromPublic = useCallback((pub: PublicSession) => {
     setSession(pub)
-    setLiveBullets(pub.liveBullets)
-    setRollingText(pub.rollingText)
+    setSpokenText(pub.spokenText)
     setSavedChunks(pub.savedChunks)
     if (pub.status === "organizing") setApiStatus("Organizing notes…")
     else setApiStatus("Live")
@@ -132,9 +130,25 @@ export function LiveLectureClient() {
 
   const mergeChunkResponse = useCallback((pub: PublicSession) => {
     hydrateFromPublic(pub)
-    setLiveBullets(pub.liveBullets)
     setSavedChunks(pub.savedChunks)
   }, [hydrateFromPublic])
+
+  const flushAudioStream = useCallback(
+    async (keepalive?: boolean) => {
+      if (!sessionId) return
+      try {
+        await fetch("/api/live/flush", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+          keepalive,
+        })
+      } catch {
+        /* ignore flush failures */
+      }
+    },
+    [sessionId]
+  )
 
   useEffect(() => {
     if (!sessionId || !isRecording) return
@@ -196,12 +210,42 @@ export function LiveLectureClient() {
     return () => clearInterval(poll)
   }, [sessionId, isPaused, mergeChunkResponse])
 
+  useEffect(() => {
+    if (!sessionId || !isPaused || !isRecording) return
+    void flushAudioStream()
+  }, [flushAudioStream, isPaused, isRecording, sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    const onBeforeUnload = () => {
+      const payload = JSON.stringify({ sessionId })
+      try {
+        const blob = new Blob([payload], { type: "application/json" })
+        if (navigator.sendBeacon("/api/live/flush", blob)) return
+      } catch {
+        /* ignore */
+      }
+
+      void fetch("/api/live/flush", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true,
+      })
+    }
+
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [sessionId])
+
   const endSession = () => {
     streamRef.current?.stop()
     streamRef.current = null
     void (async () => {
       if (!sessionId) return
       try {
+        await flushAudioStream(true)
         await fetch("/api/live/stop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -359,21 +403,10 @@ export function LiveLectureClient() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-3 max-h-36 overflow-y-auto">
-                  {rollingText.trim() ? (
+                  {spokenText.trim() ? (
                     <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
-                      {rollingText}
+                      {spokenText}
                     </p>
-                  ) : liveBullets.length > 0 ? (
-                    <ul className="space-y-1.5">
-                      {liveBullets.map((b) => (
-                        <li
-                          key={b.id}
-                          className="text-sm text-foreground/90 leading-snug border-l-2 border-primary/40 pl-2"
-                        >
-                          {b.text}
-                        </li>
-                      ))}
-                    </ul>
                   ) : (
                     <p className="text-sm text-muted-foreground">Waiting for audio...</p>
                   )}
