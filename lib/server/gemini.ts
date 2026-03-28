@@ -57,8 +57,33 @@ function getClient(): GoogleGenAI {
 }
 
 function extractTextFromLiveMessage(msg: { text?: string }): string {
-  const t = msg.text
-  if (t && t.trim()) return t
+  const direct = msg.text
+  if (direct && direct.trim()) return direct
+
+  const liveMsg = msg as {
+    serverContent?: {
+      modelTurn?: {
+        parts?: Array<{
+          text?: string
+        }>
+      }
+      inputTranscription?: { text?: string }
+      outputTranscription?: { text?: string }
+    }
+  }
+
+  const inputTranscript = liveMsg.serverContent?.inputTranscription?.text
+  if (inputTranscript && inputTranscript.trim()) return inputTranscript
+
+  const outputTranscript = liveMsg.serverContent?.outputTranscription?.text
+  if (outputTranscript && outputTranscript.trim()) return outputTranscript
+
+  const modelTurnText = liveMsg.serverContent?.modelTurn?.parts
+    ?.map((part) => part.text?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n")
+  if (modelTurnText && modelTurnText.trim()) return modelTurnText
+
   return ""
 }
 
@@ -91,6 +116,8 @@ export async function connectLiveSession(
     model,
     config: {
       responseModalities: [Modality.TEXT],
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
       systemInstruction: {
         role: "system",
         parts: [{ text: SYSTEM_INSTRUCTION }],
