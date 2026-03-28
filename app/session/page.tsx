@@ -144,6 +144,7 @@ export default function SessionSetupPage() {
   const [simplification, setSimplification] = useState<SimplificationMode>("standard")
   const [textSize, setTextSize] = useState<TextSizePreference>("medium")
   const [highContrast, setHighContrast] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
 
   const preferences = useMemo<SessionPreferences>(
     () => ({
@@ -343,6 +344,7 @@ export default function SessionSetupPage() {
   }
 
   const startSession = async () => {
+    setStartError(null)
     try {
       const res = await fetch("/api/live/start", {
         method: "POST",
@@ -356,7 +358,21 @@ export default function SessionSetupPage() {
         }),
       })
       if (!res.ok) {
-        console.error(await res.text())
+        const raw = await res.text()
+        console.error(raw)
+        let message = "Could not start the live session."
+        try {
+          const parsed = JSON.parse(raw) as { error?: string }
+          if (parsed.error?.includes("Live API connection failed")) {
+            message =
+              "Live connection failed. Your mic or Gemini Live setup may not be ready yet. Check microphone permission and API configuration, then try again."
+          } else if (parsed.error) {
+            message = parsed.error
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+        setStartError(message)
         return
       }
       const data = (await res.json()) as { sessionId: string }
@@ -364,6 +380,9 @@ export default function SessionSetupPage() {
       router.push(`/live?sessionId=${data.sessionId}`)
     } catch (e) {
       console.error(e)
+      setStartError(
+        "Could not start the live session. Your mic may be blocked or the network request failed."
+      )
     }
   }
 
@@ -399,8 +418,13 @@ export default function SessionSetupPage() {
               Configure Your <span className="text-gradient-primary">Lecture Session</span>
             </h1>
             <p className="text-lg text-muted-foreground">
-              Upload materials, choose the microphone, and set how notes should be written before class begins.
+              Upload materials and set how notes should be written before class begins.
             </p>
+            {startError && (
+              <div className="mt-4 max-w-2xl rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {startError}
+              </div>
+            )}
           </div>
 
           <div className="grid lg:grid-cols-3 gap-8">
@@ -558,100 +582,6 @@ export default function SessionSetupPage() {
                       ))}
                     </div>
                   )}
-                </CardContent>
-              </Card>
-
-              <Card className="card-futuristic animate-fade-in-up-delay-3">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Mic className="h-5 w-5 text-primary" />
-                    Audio Input
-                  </CardTitle>
-                  <CardDescription>Pick the microphone that should feed the live transcript.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex flex-col sm:flex-row gap-4">
-                    <div className="flex-1">
-                      <Label htmlFor="mic-select" className="mb-2 block">
-                        Select Microphone
-                      </Label>
-                      <select
-                        id="mic-select"
-                        value={selectedMicrophoneId}
-                        onChange={(event) => {
-                          const deviceId = event.target.value
-                          const option = microphones.find((item) => item.deviceId === deviceId)
-                          setSelectedMicrophoneId(deviceId)
-                          setSelectedMicrophoneLabel(option?.label || "Default Microphone")
-                          setMicStatus("idle")
-                          setMicMessage("Microphone changed. Run the test again to confirm input.")
-                        }}
-                        className="w-full h-10 px-3 rounded-xl bg-secondary/50 border border-border/50 text-foreground focus:border-primary/50 outline-none transition-colors"
-                      >
-                        <option value="">Default Microphone</option>
-                        {microphones.map((device) => (
-                          <option key={device.deviceId} value={device.deviceId}>
-                            {device.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="flex items-end gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void refreshMicrophones()}
-                        className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                      >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Refresh
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void testMicrophone()}
-                        disabled={micStatus === "testing"}
-                        className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                      >
-                        {micStatus === "testing" ? (
-                          "Testing..."
-                        ) : micStatus === "ready" ? (
-                          <>
-                            <CheckCircle2 className="mr-2 h-4 w-4 text-primary" />
-                            Mic Ready
-                          </>
-                        ) : (
-                          <>
-                            <Mic className="mr-2 h-4 w-4" />
-                            Test Mic
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl bg-secondary/40 border border-border/30 p-4 space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">{selectedMicrophoneLabel}</p>
-                        <p className="text-xs text-muted-foreground">{micMessage}</p>
-                      </div>
-                      {micStatus === "ready" && <CheckCircle2 className="h-5 w-5 text-primary flex-shrink-0" />}
-                    </div>
-                    <div className="h-2 rounded-full bg-background/60 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          micStatus === "error"
-                            ? "bg-destructive"
-                            : micStatus === "ready"
-                              ? "bg-primary"
-                              : "bg-muted-foreground/40"
-                        }`}
-                        style={{ width: `${Math.max(micLevel, micStatus === "ready" ? 24 : 8)}%` }}
-                      />
-                    </div>
-                  </div>
                 </CardContent>
               </Card>
 
@@ -817,18 +747,11 @@ export default function SessionSetupPage() {
                         { label: "Language", value: simplification === "simplified" ? "Easier wording" : "Standard wording" },
                         { label: "Text Size", value: `${textSize} (${textSizeToPixels(textSize)}px)` },
                         { label: "Contrast", value: highContrast ? "High" : "Normal" },
-                        {
-                          label: "Microphone",
-                          value: micStatus === "ready" ? selectedMicrophoneLabel : "Needs test",
-                          highlight: micStatus === "ready",
-                        },
                       ].map((item) => (
                         <div key={item.label} className="flex justify-between gap-3 text-sm">
                           <span className="text-muted-foreground">{item.label}</span>
                           <span
-                            className={`font-medium truncate max-w-[150px] capitalize text-right ${
-                              item.highlight ? "text-primary" : "text-foreground"
-                            }`}
+                            className="font-medium truncate max-w-[150px] capitalize text-right text-foreground"
                           >
                             {item.value}
                           </span>
@@ -839,7 +762,7 @@ export default function SessionSetupPage() {
                     <div className="p-3 rounded-xl bg-primary/10 border border-primary/20">
                       <p className="text-sm text-primary font-medium">What will carry into the session</p>
                       <p className="text-xs text-foreground/80 mt-1">
-                        Material list, microphone choice, text size, contrast, and note-generation preferences.
+                        Material list, text size, contrast, and note-generation preferences.
                       </p>
                     </div>
 

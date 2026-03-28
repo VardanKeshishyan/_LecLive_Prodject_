@@ -210,7 +210,7 @@ export function LiveLectureClient() {
       const createdAt = new Date().toISOString()
       const atSec = elapsedTime
       const transcriptSource =
-        spokenText.trim() || localSpokenText.trim() || rollingText.trim()
+        localSpokenText.trim() || spokenText.trim() || rollingText.trim()
       const latestLine = transcriptSource
         .split("\n")
         .map((s) => s.trim())
@@ -730,13 +730,13 @@ export function LiveLectureClient() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-3 max-h-36 overflow-y-auto">
-                  {spokenText.trim() ? (
-                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
-                      {spokenText}
-                    </p>
-                  ) : localSpokenText.trim() ? (
+                  {localSpokenText.trim() ? (
                     <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
                       {localSpokenText}
+                    </p>
+                  ) : spokenText.trim() ? (
+                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
+                      {spokenText}
                     </p>
                   ) : rollingText.trim() ? (
                     <p className="whitespace-pre-wrap text-sm text-foreground/70 leading-snug">
@@ -840,25 +840,10 @@ export function LiveLectureClient() {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    AI Assistant
+                    Post-Lecture Tools
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/30 opacity-80">
-                    <button
-                      type="button"
-                      disabled
-                      className="h-9 w-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0"
-                    >
-                      <Mic className="h-4 w-4 text-primary-foreground" />
-                    </button>
-                    <input
-                      type="text"
-                      disabled
-                      placeholder="Ask a question..."
-                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                    />
-                  </div>
                   <div className="space-y-1.5">
                     {[
                       {
