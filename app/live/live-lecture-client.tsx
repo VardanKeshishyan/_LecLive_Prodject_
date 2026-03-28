@@ -1,0 +1,643 @@
+"use client"
+
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { startPcmStreaming, type PcmStreamHandle } from "@/lib/client/pcm-stream"
+import type { LiveBullet, PublicSession, SavedChunkNote } from "@/lib/types"
+import {
+  Mic,
+  MicOff,
+  Pause,
+  Play,
+  Square,
+  Volume2,
+  VolumeX,
+  Bookmark,
+  Pin,
+  AlertCircle,
+  Presentation,
+  ChevronRight,
+  Sparkles,
+  RefreshCw,
+  BookOpen,
+  HelpCircle,
+  Lightbulb,
+  GraduationCap,
+  Clock,
+  Tag,
+  ZoomIn,
+  ZoomOut,
+  Sun,
+  Moon,
+  Zap,
+} from "lucide-react"
+
+function formatClock(totalSec: number): string {
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec % 60
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
+}
+
+function formatRange(startSec: number, endSec: number): string {
+  return `${formatClock(startSec)}–${formatClock(endSec)}`
+}
+
+export function LiveLectureClient() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [session, setSession] = useState<PublicSession | null>(null)
+  const [liveBullets, setLiveBullets] = useState<LiveBullet[]>([])
+  const [savedChunks, setSavedChunks] = useState<SavedChunkNote[]>([])
+  const [apiStatus, setApiStatus] = useState<string>("Live")
+  const [lastUpdatedLabel, setLastUpdatedLabel] = useState<string>("")
+
+  const [isRecording, setIsRecording] = useState(true)
+  const [isPaused, setIsPaused] = useState(false)
+  const [isTTSActive, setIsTTSActive] = useState(false)
+  const [elapsedTime, setElapsedTime] = useState(0)
+  const [voiceInput, setVoiceInput] = useState("")
+  const [textSize, setTextSize] = useState(16)
+  const [highContrast, setHighContrast] = useState(false)
+  const [speechSpeed, setSpeechSpeed] = useState(1)
+  const [currentSlide, setCurrentSlide] = useState(8)
+
+  const streamRef = useRef<PcmStreamHandle | null>(null)
+  const pausedRef = useRef(isPaused)
+  pausedRef.current = isPaused
+
+  useEffect(() => {
+    const id =
+      searchParams.get("sessionId") ||
+      (typeof window !== "undefined"
+        ? sessionStorage.getItem("lectureSessionId")
+        : null)
+    if (!id) {
+      router.replace("/session")
+      return
+    }
+    setSessionId(id)
+    sessionStorage.setItem("lectureSessionId", id)
+  }, [router, searchParams])
+
+  useEffect(() => {
+    if (!isPaused && isRecording) {
+      const interval = setInterval(() => {
+        setElapsedTime((prev) => prev + 1)
+      }, 1000)
+      return () => clearInterval(interval)
+    }
+  }, [isPaused, isRecording])
+
+  const hydrateFromPublic = useCallback((pub: PublicSession) => {
+    setSession(pub)
+    setLiveBullets(pub.liveBullets)
+    setSavedChunks(pub.savedChunks)
+    if (pub.status === "organizing") setApiStatus("Organizing notes…")
+    else setApiStatus("Live")
+    if (pub.lastUpdated) {
+      setLastUpdatedLabel(new Date(pub.lastUpdated).toLocaleTimeString())
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!sessionId) return
+    void (async () => {
+      try {
+        const res = await fetch(`/api/session/${sessionId}`)
+        if (res.ok) {
+          const pub = (await res.json()) as PublicSession
+          hydrateFromPublic(pub)
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+  }, [sessionId, hydrateFromPublic])
+
+  const mergeChunkResponse = useCallback((pub: PublicSession) => {
+    hydrateFromPublic(pub)
+    setLiveBullets(pub.liveBullets)
+    setSavedChunks(pub.savedChunks)
+  }, [hydrateFromPublic])
+
+  useEffect(() => {
+    if (!sessionId || !isRecording) return
+
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const handle = await startPcmStreaming(sessionId, {
+          shouldSend: () => !pausedRef.current && !cancelled,
+          onTransportError: (e) => console.error("[chunk]", e),
+          onChunkResponse: (body) => {
+            const b = body as { session?: PublicSession }
+            if (b.session) mergeChunkResponse(b.session)
+          },
+        })
+        if (cancelled) {
+          handle.stop()
+          return
+        }
+        streamRef.current = handle
+      } catch (e) {
+        console.error("[mic]", e)
+        setApiStatus("Mic error — check permissions")
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      streamRef.current?.stop()
+      streamRef.current = null
+    }
+  }, [sessionId, isRecording, mergeChunkResponse])
+
+  useEffect(() => {
+    if (!sessionId || isPaused) return
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/session/${sessionId}`)
+        if (res.ok) {
+          const pub = (await res.json()) as PublicSession
+          mergeChunkResponse(pub)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 4000)
+    return () => clearInterval(poll)
+  }, [sessionId, isPaused, mergeChunkResponse])
+
+  const endSession = () => {
+    streamRef.current?.stop()
+    streamRef.current = null
+    void (async () => {
+      if (!sessionId) return
+      try {
+        await fetch("/api/live/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        })
+      } catch (e) {
+        console.error(e)
+      }
+      router.push(`/summary?sessionId=${sessionId}`)
+    })()
+  }
+
+  const lectureTitle = session?.meta.title || "Live lecture"
+
+  return (
+    <div className={`min-h-screen bg-background ${highContrast ? "contrast-125" : ""}`}>
+      <header className="fixed top-0 left-0 right-0 z-50 glass-strong border-b border-border/30">
+        <div className="px-4 sm:px-6 lg:px-8">
+          <div className="flex h-14 items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                {isRecording && !isPaused && (
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-destructive"></span>
+                  </span>
+                )}
+                <span
+                  className={`text-sm font-semibold ${isPaused ? "text-muted-foreground" : "text-destructive"}`}
+                >
+                  {isPaused ? "Paused" : "LIVE"}
+                </span>
+              </div>
+              <div className="hidden sm:block h-4 w-px bg-border/50" />
+              <h1 className="hidden sm:block text-sm font-medium text-foreground truncate max-w-[200px]">
+                {lectureTitle}
+              </h1>
+              <span className="text-xs text-muted-foreground px-2 py-0.5 rounded-md bg-secondary/60 border border-border/40">
+                {apiStatus}
+                {lastUpdatedLabel ? ` · ${lastUpdatedLabel}` : ""}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg glass">
+                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-sm font-mono text-foreground tabular-nums">
+                  {formatClock(elapsedTime)}
+                </span>
+              </div>
+
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${isRecording ? "bg-primary/10 border border-primary/20" : "bg-muted border border-border/50"}`}
+              >
+                {isRecording ? (
+                  <Mic className="h-3.5 w-3.5 text-primary" />
+                ) : (
+                  <MicOff className="h-3.5 w-3.5 text-muted-foreground" />
+                )}
+                <span className="hidden sm:inline text-sm text-foreground">
+                  {isRecording ? "Listening" : "Muted"}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 border-border/50"
+                  onClick={() => setIsPaused(!isPaused)}
+                >
+                  {isPaused ? (
+                    <Play className="h-3.5 w-3.5" />
+                  ) : (
+                    <Pause className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                <Button variant="destructive" size="sm" className="h-8" onClick={endSession}>
+                  <Square className="h-3.5 w-3.5 mr-1.5" />
+                  End
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="pt-20 pb-24 px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-7xl">
+          <div className="grid lg:grid-cols-12 gap-5 pt-4">
+            <div className="lg:col-span-3 space-y-4">
+              <Card className="card-futuristic overflow-hidden">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Presentation className="h-4 w-4 text-primary" />
+                    Current Slide
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="aspect-video bg-secondary/50 rounded-xl mb-3 flex items-center justify-center relative overflow-hidden border border-border/30">
+                    <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-accent/5" />
+                    <div className="text-center z-10">
+                      <Presentation className="h-10 w-10 text-muted-foreground/20 mx-auto mb-2" />
+                      <p className="text-xs text-muted-foreground/60">Slide Preview</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      Slide {currentSlide} of 24
+                    </span>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        onClick={() => setCurrentSlide(Math.max(1, currentSlide - 1))}
+                      >
+                        <ChevronRight className="h-3.5 w-3.5 rotate-180" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        onClick={() => setCurrentSlide(Math.min(24, currentSlide + 1))}
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="card-futuristic overflow-hidden">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-primary" />
+                    Session
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {session?.fallbackNote ||
+                      "Notes emphasize ideas, terms, and exam-relevant signals—not raw transcript."}
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="lg:col-span-6 space-y-4">
+              <Card className="card-futuristic overflow-hidden border-primary/15">
+                <CardHeader className="pb-2 border-b border-border/30">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-primary" />
+                    Live quick bullets
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-3 max-h-36 overflow-y-auto">
+                  <ul className="space-y-1.5">
+                    {liveBullets.length === 0 ? (
+                      <li className="text-sm text-muted-foreground">Waiting for audio…</li>
+                    ) : (
+                      liveBullets.map((b) => (
+                        <li
+                          key={b.id}
+                          className="text-sm text-foreground/90 leading-snug border-l-2 border-primary/40 pl-2"
+                        >
+                          {b.text}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </CardContent>
+              </Card>
+
+              <Card className="card-futuristic h-full overflow-hidden">
+                <CardHeader className="pb-3 border-b border-border/30">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center gap-2">
+                      <BookOpen className="h-5 w-5 text-primary" />
+                      Saved structured notes
+                    </CardTitle>
+                    <span className="text-xs text-muted-foreground px-2 py-0.5 rounded-md bg-secondary/50">
+                      {savedChunks.length} blocks
+                    </span>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div
+                    className="max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto p-4 space-y-4"
+                    style={{ fontSize: `${textSize}px` }}
+                  >
+                    {savedChunks.map((chunk) => (
+                      <div
+                        key={chunk.id}
+                        className="rounded-xl border border-border/40 bg-primary/5 p-4 hover-glow transition-all duration-300"
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div>
+                            <h3 className="font-semibold text-foreground">{chunk.title}</h3>
+                            <p className="text-xs font-mono text-muted-foreground mt-0.5">
+                              {formatRange(chunk.startTimeSec, chunk.endTimeSec)}
+                            </p>
+                          </div>
+                        </div>
+                        {chunk.keyPoints.length > 0 && (
+                          <div className="mb-2">
+                            <p className="text-xs font-medium text-primary mb-1">Key points</p>
+                            <ul className="list-disc pl-4 space-y-1 text-foreground/90">
+                              {chunk.keyPoints.map((k, i) => (
+                                <li key={i}>{k}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {chunk.importantTerms.length > 0 && (
+                          <div className="mb-2 flex flex-wrap gap-1.5">
+                            {chunk.importantTerms.map((t, i) => (
+                              <span
+                                key={i}
+                                className="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/25"
+                              >
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {chunk.exampleOrApplication && (
+                          <p className="text-sm text-muted-foreground mt-2">
+                            <span className="text-chart-3 font-medium">Example: </span>
+                            {chunk.exampleOrApplication}
+                          </p>
+                        )}
+                        {(chunk.possibleQuestion || chunk.whyItMatters) && (
+                          <div className="mt-2 text-xs text-muted-foreground space-y-1">
+                            {chunk.possibleQuestion && (
+                              <p>
+                                <span className="font-medium text-foreground/80">Question: </span>
+                                {chunk.possibleQuestion}
+                              </p>
+                            )}
+                            {chunk.whyItMatters && (
+                              <p>
+                                <span className="font-medium text-foreground/80">Why it matters: </span>
+                                {chunk.whyItMatters}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {savedChunks.length === 0 && (
+                      <p className="text-sm text-muted-foreground text-center py-8">
+                        Saved blocks appear every few minutes while you lecture stays active. Nothing is
+                        removed when new blocks arrive.
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="lg:col-span-3 space-y-4">
+              <Card className="card-futuristic overflow-hidden">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    AI Assistant
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/30">
+                    <button
+                      type="button"
+                      className="h-9 w-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0 hover:bg-primary/90 transition-colors glow-primary"
+                    >
+                      <Mic className="h-4 w-4 text-primary-foreground" />
+                    </button>
+                    <input
+                      type="text"
+                      placeholder="Ask a question…"
+                      value={voiceInput}
+                      onChange={(e) => setVoiceInput(e.target.value)}
+                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {[
+                      { icon: RefreshCw, label: "Repeat Last Point", description: "Hear the last key point again" },
+                      { icon: Lightbulb, label: "Simplify Concept", description: "Explain in simpler terms" },
+                      { icon: Volume2, label: "Read Aloud", description: "Read recent notes" },
+                      { icon: Presentation, label: "Current Slide", description: "What slide are we on?" },
+                      { icon: GraduationCap, label: "Make Quiz", description: "Generate a quick quiz from recent notes" },
+                    ].map((action, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-secondary/50 hover:bg-primary/10 border border-border/30 hover:border-primary/30 transition-all duration-200 text-left group"
+                      >
+                        <action.icon className="h-4 w-4 text-primary flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground">{action.label}</p>
+                          <p className="text-xs text-muted-foreground truncate">{action.description}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="card-futuristic overflow-hidden">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <HelpCircle className="h-4 w-4 text-primary" />
+                    Accessibility
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Text Size</span>
+                      <span className="text-sm text-foreground font-mono">{textSize}px</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0 border-border/50"
+                        onClick={() => setTextSize(Math.max(12, textSize - 2))}
+                      >
+                        <ZoomOut className="h-4 w-4" />
+                      </Button>
+                      <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{ width: `${((textSize - 12) / 12) * 100}%` }}
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-8 p-0 border-border/50"
+                        onClick={() => setTextSize(Math.min(24, textSize + 2))}
+                      >
+                        <ZoomIn className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Speech Speed</span>
+                      <span className="text-sm text-foreground font-mono">{speechSpeed}x</span>
+                    </div>
+                    <div className="flex gap-1">
+                      {[0.5, 0.75, 1, 1.25, 1.5].map((speed) => (
+                        <button
+                          key={speed}
+                          type="button"
+                          onClick={() => setSpeechSpeed(speed)}
+                          className={`flex-1 py-1.5 text-xs rounded-lg transition-colors ${
+                            speechSpeed === speed
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                          }`}
+                        >
+                          {speed}x
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => setHighContrast(!highContrast)}
+                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${
+                        highContrast
+                          ? "bg-primary/15 border-primary/30 text-primary"
+                          : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {highContrast ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                        <span className="text-sm">High Contrast</span>
+                      </div>
+                      <div
+                        className={`h-5 w-9 rounded-full transition-colors ${highContrast ? "bg-primary" : "bg-muted"}`}
+                      >
+                        <div
+                          className={`h-4 w-4 rounded-full bg-background transition-transform mt-0.5 shadow-sm ${highContrast ? "translate-x-4 ml-0.5" : "translate-x-0.5"}`}
+                        />
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsTTSActive(!isTTSActive)}
+                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${
+                        isTTSActive
+                          ? "bg-primary/15 border-primary/30 text-primary"
+                          : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {isTTSActive ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                        <span className="text-sm">Auto Read Notes</span>
+                      </div>
+                      <div
+                        className={`h-5 w-9 rounded-full transition-colors ${isTTSActive ? "bg-primary" : "bg-muted"}`}
+                      >
+                        <div
+                          className={`h-4 w-4 rounded-full bg-background transition-transform mt-0.5 shadow-sm ${isTTSActive ? "translate-x-4 ml-0.5" : "translate-x-0.5"}`}
+                        />
+                      </div>
+                    </button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <footer className="fixed bottom-0 left-0 right-0 glass-strong border-t border-border/30">
+        <div className="px-4 sm:px-6 lg:px-8 py-3">
+          <div className="mx-auto max-w-7xl">
+            <div className="flex items-center justify-center gap-3 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsPaused(!isPaused)}
+                className="gap-2 border-border/50 hover:border-primary/40"
+              >
+                {isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                {isPaused ? "Resume" : "Pause"}
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-chart-3/30 text-chart-3 hover:bg-chart-3/10 hover:border-chart-3/50"
+              >
+                <AlertCircle className="h-4 w-4" />
+                Mark Confusion
+              </Button>
+
+              <Button variant="outline" size="sm" className="gap-2 border-border/50 hover:border-primary/40">
+                <Bookmark className="h-4 w-4" />
+                Save Moment
+              </Button>
+
+              <Button variant="destructive" size="sm" onClick={endSession} className="gap-2">
+                <Square className="h-4 w-4" />
+                End Lecture
+              </Button>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  )
+}

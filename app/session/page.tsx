@@ -43,8 +43,27 @@ export default function SessionSetupPage() {
     setTimeout(() => setMicStatus("ready"), 1500)
   }
 
-  const startSession = () => {
-    router.push("/live")
+  const startSession = async () => {
+    try {
+      const res = await fetch("/api/live/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: lectureTitle,
+          course: courseName,
+          instructor: instructorName,
+        }),
+      })
+      if (!res.ok) {
+        console.error(await res.text())
+        return
+      }
+      const data = (await res.json()) as { sessionId: string }
+      sessionStorage.setItem("lectureSessionId", data.sessionId)
+      router.push(`/live?sessionId=${data.sessionId}`)
+    } catch (e) {
+      console.error(e)
+    }
   }
 
   return (

@@ -1,6 +1,12 @@
+# Dependencies
 node_modules/
+
+# Next.js build & cache (never commit — huge and machine-specific)
 .next/
 out/
 dist/
+
+# Local secrets
 .env
 .env.local
+.env*.local

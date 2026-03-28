@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
+    "dev:webpack": "next dev -H 127.0.0.1 -p 3000 --webpack",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
+    "@google/genai": "^1.46.0",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-slot": "^1.2.4",
     "class-variance-authority": "^0.7.1",
