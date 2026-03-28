@@ -338,7 +338,7 @@ ${chunksText || "(none)"}
 Extra recent context:
 ${state.bufferSinceLastChunk.slice(0, 12_000)}
 
-Return JSON only:
+Return JSON only (all fields exactly as typed, importantExamples must be an array of plain strings — not objects):
 {
   "overallSummary": string,
   "mainTopics": string[],
@@ -358,7 +358,21 @@ Return JSON only:
 
   const raw = res.text?.trim()
   if (!raw) throw new Error("Empty summary response")
-  return JSON.parse(raw) as SessionSummary
+  const parsed = JSON.parse(raw) as SessionSummary
+  // Normalize importantExamples — model sometimes returns objects instead of strings
+  if (Array.isArray(parsed.importantExamples)) {
+    parsed.importantExamples = parsed.importantExamples.map((ex) => {
+      if (typeof ex === "string") return ex
+      if (ex && typeof ex === "object") {
+        // Handle {example, description}, {text}, {content}, etc.
+        return Object.values(ex as Record<string, unknown>)
+          .filter((v) => typeof v === "string")
+          .join(" — ") || JSON.stringify(ex)
+      }
+      return String(ex)
+    })
+  }
+  return parsed
 }
 
 function mockSavedChunk(state: InternalSessionState): SavedChunkNote {

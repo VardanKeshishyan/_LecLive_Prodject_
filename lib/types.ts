@@ -48,6 +48,8 @@ export interface UploadedMaterial {
   type: string
   size: number
   textContent?: string
+  /** Client-only: base64 data URL for image preview in the live slide panel. Never sent to server. */
+  dataUrl?: string
 }
 
 export interface SessionPreferences {

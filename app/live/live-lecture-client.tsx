@@ -12,7 +12,6 @@ import {
   Pause,
   Play,
   Square,
-  RefreshCw,
   Volume2,
   Bookmark,
   AlertCircle,
@@ -122,6 +121,7 @@ export function LiveLectureClient() {
   const pausedRef = useRef(isPaused)
   const appliedSessionPreferencesRef = useRef(false)
   const localSpokenTextRef = useRef("")
+  const localMaterialsRef = useRef<import("@/lib/types").UploadedMaterial[]>([])
   pausedRef.current = isPaused
   localSpokenTextRef.current = localSpokenText
 
@@ -155,7 +155,8 @@ export function LiveLectureClient() {
     try {
       const raw = sessionStorage.getItem("lectureSessionSetup")
       if (!raw) return
-      const stored = JSON.parse(raw) as { preferences?: SessionPreferences }
+      const stored = JSON.parse(raw) as { preferences?: SessionPreferences; uploadedFiles?: import("@/lib/types").UploadedMaterial[] }
+      if (stored.uploadedFiles) localMaterialsRef.current = stored.uploadedFiles
       if (!stored.preferences) return
       setPreferredMicrophoneId(stored.preferences.microphoneDeviceId ?? "")
       setTextSize(textSizeFromPreference(stored.preferences.textSize))
@@ -454,10 +455,7 @@ export function LiveLectureClient() {
     return () => clearInterval(poll)
   }, [sessionId, isPaused, mergeChunkResponse])
 
-  useEffect(() => {
-    if (!sessionId || !isPaused || !isRecording) return
-    void flushAudioStream()
-  }, [flushAudioStream, isPaused, isRecording, sessionId])
+
 
   useEffect(() => {
     if (!sessionId) return
@@ -508,22 +506,20 @@ export function LiveLectureClient() {
   }, [sessionId])
 
   const endSession = () => {
+    if (!sessionId) return
+    // Stop mic stream immediately
     streamRef.current?.stop()
     streamRef.current = null
-    void (async () => {
-      if (!sessionId) return
-      try {
-        await flushAudioStream(true)
-        await fetch("/api/live/stop", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
-        })
-      } catch (e) {
-        console.error(e)
-      }
-      router.push(`/summary?sessionId=${sessionId}`)
-    })()
+    shouldRunSpeechRef.current = false
+    // Navigate right away — don't wait for server
+    router.push(`/summary?sessionId=${sessionId}`)
+    // Fire stop API in background (generates summary server-side)
+    void fetch("/api/live/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+      keepalive: true,
+    }).catch(() => { /* ignore */ })
   }
 
   const lectureTitle = session?.meta.title || "Live lecture"
@@ -621,21 +617,35 @@ export function LiveLectureClient() {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Presentation className="h-4 w-4 text-primary" />
-                    Current Slide
+                    Current File
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="aspect-video bg-secondary/50 rounded-xl mb-3 flex items-center justify-center relative overflow-hidden border border-border/30">
                     <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-accent/5" />
-                    {selectedMaterial ? (
-                      <div className="text-center z-10 px-4">
-                        <FileText className="h-10 w-10 text-primary/50 mx-auto mb-2" />
-                        <p className="text-sm text-foreground font-medium line-clamp-2">
-                          {selectedMaterial.name}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-1">Uploaded session material</p>
-                      </div>
-                    ) : (
+                    {selectedMaterial ? (() => {
+                      // Try to find the local material with dataUrl
+                      const localMat = localMaterialsRef.current.find(m => m.id === selectedMaterial.id)
+                      const dataUrl = localMat?.dataUrl
+                      if (dataUrl) {
+                        return (
+                          <img
+                            src={dataUrl}
+                            alt={selectedMaterial.name}
+                            className="absolute inset-0 w-full h-full object-contain z-10"
+                          />
+                        )
+                      }
+                      return (
+                        <div className="text-center z-10 px-4">
+                          <FileText className="h-10 w-10 text-primary/50 mx-auto mb-2" />
+                          <p className="text-sm text-foreground font-medium line-clamp-2">
+                            {selectedMaterial.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">Uploaded session material</p>
+                        </div>
+                      )
+                    })() : (
                       <div className="text-center z-10">
                         <Presentation className="h-10 w-10 text-muted-foreground/20 mx-auto mb-2" />
                         <p className="text-xs text-muted-foreground/60">No uploaded materials yet</p>
@@ -789,19 +799,19 @@ export function LiveLectureClient() {
                             </p>
                           </div>
                         </div>
-                        {chunk.keyPoints.length > 0 && (
+                        {(chunk.keyPoints?.length ?? 0) > 0 && (
                           <div className="mb-2">
                             <p className="text-xs font-medium text-primary mb-1">Key points</p>
                             <ul className="list-disc pl-4 space-y-1 text-foreground/90">
-                              {chunk.keyPoints.map((k, i) => (
+                              {chunk.keyPoints?.map((k, i) => (
                                 <li key={i}>{k}</li>
                               ))}
                             </ul>
                           </div>
                         )}
-                        {showExpandedNoteDetails && chunk.importantTerms.length > 0 && (
+                        {showExpandedNoteDetails && (chunk.importantTerms?.length ?? 0) > 0 && (
                           <div className="mb-2 flex flex-wrap gap-1.5">
-                            {chunk.importantTerms.map((t, i) => (
+                            {chunk.importantTerms?.map((t, i) => (
                               <span
                                 key={i}
                                 className="text-xs px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/25"
@@ -857,26 +867,13 @@ export function LiveLectureClient() {
                 <CardContent className="space-y-4">
                   <div className="space-y-1.5">
                     {[
-                      {
-                        icon: RefreshCw,
-                        label: "Repeat Last Point",
-                        description: "Hear the last key point again",
-                      },
+
                       {
                         icon: Lightbulb,
                         label: "Simplify Concept",
                         description: "Explain in simpler terms",
                       },
-                      {
-                        icon: Volume2,
-                        label: "Read Aloud",
-                        description: "Read recent notes",
-                      },
-                      {
-                        icon: Presentation,
-                        label: "Current Slide",
-                        description: "What slide are we on?",
-                      },
+
                       {
                         icon: GraduationCap,
                         label: "Make Quiz",
@@ -944,11 +941,10 @@ export function LiveLectureClient() {
                     <button
                       type="button"
                       onClick={() => setHighContrast(!highContrast)}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${
-                        highContrast
+                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${highContrast
                           ? "bg-primary/15 border-primary/30 text-primary"
                           : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20"
-                      }`}
+                        }`}
                     >
                       <div className="flex items-center gap-2">
                         {highContrast ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

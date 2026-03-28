@@ -72,6 +72,24 @@ function buildMaterialId(file: File): string {
   return `${file.name}-${file.size}-${Date.now()}`
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(",")[1] ?? "")
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
 async function extractMaterialText(file: File): Promise<string | undefined> {
   const lowerName = file.name.toLowerCase()
   const isPlainText =
@@ -81,24 +99,58 @@ async function extractMaterialText(file: File): Promise<string | undefined> {
     lowerName.endsWith(".csv") ||
     lowerName.endsWith(".json")
 
-  if (!isPlainText) return undefined
+  if (isPlainText) {
+    try {
+      const text = await file.text()
+      const trimmed = text.trim()
+      return trimmed ? trimmed.slice(0, MATERIAL_TEXT_LIMIT) : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  // Use Gemini to extract text from PDFs, PPTs, and images
+  const extractableMimeTypes = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-powerpoint",
+    "image/png", "image/jpeg", "image/gif", "image/webp",
+  ]
+  const isExtractable = extractableMimeTypes.includes(file.type) ||
+    lowerName.endsWith(".pdf") ||
+    lowerName.endsWith(".pptx") ||
+    lowerName.endsWith(".ppt")
+
+  if (!isExtractable) return undefined
 
   try {
-    const text = await file.text()
-    const trimmed = text.trim()
-    return trimmed ? trimmed.slice(0, MATERIAL_TEXT_LIMIT) : undefined
+    const fileBase64 = await fileToBase64(file)
+    const res = await fetch("/api/upload/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileBase64, mimeType: file.type, fileName: file.name }),
+    })
+    if (!res.ok) return undefined
+    const data = (await res.json()) as { text?: string }
+    return data.text?.trim() || undefined
   } catch {
     return undefined
   }
 }
 
 async function toUploadedMaterial(file: File): Promise<UploadedMaterial> {
+  const isImage = file.type.startsWith("image/")
+  const [textContent, dataUrl] = await Promise.all([
+    extractMaterialText(file),
+    isImage ? fileToDataUrl(file) : Promise.resolve(undefined),
+  ])
   return {
     id: buildMaterialId(file),
     name: file.name,
     type: file.type || "application/octet-stream",
     size: file.size,
-    textContent: await extractMaterialText(file),
+    textContent,
+    dataUrl,
   }
 }
 
@@ -543,18 +595,8 @@ export default function SessionSetupPage() {
                     </p>
                   </div>
 
-                  <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="mt-4">
                     <p className="text-sm text-muted-foreground">{materialContextLabel}</p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="border-border/50 hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                      onClick={openFilePicker}
-                    >
-                      <FileUp className="mr-2 h-4 w-4" />
-                      Add Files
-                    </Button>
                   </div>
 
                   {uploadedFiles.length > 0 && (

@@ -10,14 +10,13 @@ import { Navbar } from "@/components/navbar"
 import type { PublicSession } from "@/lib/types"
 import {
   ArrowLeft,
+  ArrowRight,
   Download,
   Share2,
-  Mic,
   Play,
   Pause,
   Volume2,
   Bookmark,
-  RefreshCw,
   Search,
   FileText,
   BookOpen,
@@ -29,6 +28,8 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
+  Send,
+  Loader2,
 } from "lucide-react"
 
 function downloadTextFile(filename: string, content: string): void {
@@ -63,12 +64,16 @@ export function SummaryClient() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [audioDuration, setAudioDuration] = useState(0)
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const [speechRate, setSpeechRate] = useState(1)
   const [aiQuiz, setAiQuiz] = useState<string[]>([])
   const [showSimplified, setShowSimplified] = useState(false)
   const [marks, setMarks] = useState<Array<{ kind: string; atSec: number; note?: string }>>([])
   const [assistantPrompt, setAssistantPrompt] = useState("")
   const [assistantReply, setAssistantReply] = useState("")
+  const [isAsking, setIsAsking] = useState(false)
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     summary: true,
     keyPoints: true,
@@ -77,6 +82,7 @@ export function SummaryClient() {
     examTopics: true,
   })
   const speakingRef = useRef(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const sessionPreferencesAppliedRef = useRef(false)
 
   useEffect(() => {
@@ -84,7 +90,13 @@ export function SummaryClient() {
       setLoadError("No session id. Start a session from the demo page.")
       return
     }
-    void (async () => {
+
+    let cancelled = false
+    const MAX_ATTEMPTS = 14  // ~40 seconds total
+    const POLL_INTERVAL_MS = 3000
+
+    const tryLoad = async (attempt: number) => {
+      if (cancelled) return
       try {
         const res = await fetch(`/api/session/${sessionId}`)
         if (!res.ok) {
@@ -93,10 +105,39 @@ export function SummaryClient() {
         }
         const data = (await res.json()) as PublicSession
         setSession(data)
+
+        // If no summary yet and we still have attempts, keep polling
+        if (!data.summary && attempt < MAX_ATTEMPTS) {
+          setTimeout(() => void tryLoad(attempt + 1), POLL_INTERVAL_MS)
+          return
+        }
+
+        // Auto-save to My Notes once we have a summary
+        if (data.summary) {
+          try {
+            const NOTES_KEY = "leclive_saved_notes"
+            const existing = JSON.parse(localStorage.getItem(NOTES_KEY) || "[]") as { id: string }[]
+            const alreadySaved = existing.some((n) => n.id === `session-${sessionId}`)
+            if (!alreadySaved) {
+              const noteEntry = {
+                id: `session-${sessionId}`,
+                title: data.meta.title || "Untitled Lecture",
+                course: data.meta.course,
+                createdAt: data.createdAt,
+                ...data.summary,
+                savedChunks: data.savedChunks.map((c) => ({ title: c.title, keyPoints: c.keyPoints ?? [] })),
+              }
+              localStorage.setItem(NOTES_KEY, JSON.stringify([noteEntry, ...existing]))
+            }
+          } catch { /* ignore storage errors */ }
+        }
       } catch {
-        setLoadError("Could not load session.")
+        if (!cancelled) setLoadError("Could not load session.")
       }
-    })()
+    }
+
+    void tryLoad(0)
+    return () => { cancelled = true }
   }, [sessionId])
 
   useEffect(() => {
@@ -191,27 +232,94 @@ export function SummaryClient() {
     setAiQuiz([...fromTopics, ...fromDefs])
   }, [summary])
 
-  const readSummaryAloud = useCallback(() => {
+  const readSummaryAloud = useCallback(async () => {
     if (!summary) return
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return
-    if (speakingRef.current) {
-      window.speechSynthesis.cancel()
-      speakingRef.current = false
-      setIsPlaying(false)
+
+    // If audio is loaded and paused/playing, just toggle it
+    if (audioRef.current && !audioRef.current.ended && audioRef.current.src) {
+      if (isPlaying) {
+        audioRef.current.pause()
+        setIsPlaying(false)
+      } else {
+        audioRef.current.playbackRate = speechRate
+        void audioRef.current.play()
+        setIsPlaying(true)
+      }
       return
     }
+
+    // Fresh fetch
     const text = showSimplified ? simplifiedSummary : summary.overallSummary
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = speechRate
-    utterance.onend = () => {
+    if (!text?.trim()) return
+
+    setIsLoading(true)
+    setIsPlaying(false)
+    speakingRef.current = false
+    // Clear old audio
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.src = ""
+      audioRef.current = null
+    }
+
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, voiceName: "Kore" }),
+      })
+
+      if (!res.ok) throw new Error("TTS request failed")
+
+      const data = (await res.json()) as { audioBase64?: string; mimeType?: string; error?: string }
+      if (!data.audioBase64) throw new Error(data.error ?? "No audio returned")
+
+      const mimeType = data.mimeType ?? "audio/wav"
+      const audioSrc = `data:${mimeType};base64,${data.audioBase64}`
+      const audio = new Audio()
+      audioRef.current = audio
+
+      audio.addEventListener("loadedmetadata", () => {
+        audio.playbackRate = speechRate
+        setAudioDuration(audio.duration)
+      })
+
+      audio.addEventListener("timeupdate", () => {
+        setAudioCurrentTime(audio.currentTime)
+      })
+
+      audio.onended = () => {
+        speakingRef.current = false
+        setIsPlaying(false)
+        setAudioCurrentTime(0)
+      }
+
+      audio.onerror = () => {
+        speakingRef.current = false
+        setIsPlaying(false)
+        setIsLoading(false)
+      }
+
+      audio.src = audioSrc
+      audio.load()
+      setIsLoading(false)
+      speakingRef.current = true
+      setIsPlaying(true)
+      await audio.play()
+    } catch (e) {
+      console.error("[tts]", e)
       speakingRef.current = false
       setIsPlaying(false)
+      setIsLoading(false)
     }
-    speakingRef.current = true
-    setIsPlaying(true)
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
-  }, [showSimplified, simplifiedSummary, speechRate, summary])
+  }, [isPlaying, showSimplified, simplifiedSummary, speechRate, summary])
+
+  // Apply rate change to currently playing audio without restarting
+  useEffect(() => {
+    if (audioRef.current && !audioRef.current.paused && !audioRef.current.ended) {
+      audioRef.current.playbackRate = speechRate
+    }
+  }, [speechRate])
 
   const readTextAloud = useCallback(
     (text: string) => {
@@ -228,67 +336,39 @@ export function SummaryClient() {
     [speechRate]
   )
 
-  const handleAssistantPrompt = useCallback(() => {
-    if (!summary) return
-    const q = assistantPrompt.trim().toLowerCase()
-    if (!q) return
-
-    if (q.includes("definition")) {
-      const top = summary.majorDefinitions[0]
-      setAssistantReply(
-        top ? `${top.term}: ${top.definition}` : "No definition found in this session."
-      )
-      return
+  const handleAssistantPrompt = useCallback(async () => {
+    const q = assistantPrompt.trim()
+    if (!q || !sessionId || isAsking) return
+    setIsAsking(true)
+    setAssistantReply("")
+    try {
+      const res = await fetch(`/api/session/${sessionId}/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q }),
+      })
+      const data = (await res.json()) as { answer?: string; error?: string }
+      setAssistantReply(data.answer ?? data.error ?? "No answer returned.")
+    } catch {
+      setAssistantReply("Connection error — please try again.")
+    } finally {
+      setIsAsking(false)
+      setAssistantPrompt("")
     }
-
-    if (q.includes("quiz") || q.includes("question")) {
-      generateQuiz()
-      setAssistantReply("Generated a quick quiz below.")
-      return
-    }
-
-    const topicMatch = summary.mainTopics.find((t) =>
-      t.toLowerCase().includes(q.split(" ").find((w) => w.length > 3) || "")
-    )
-    setAssistantReply(
-      topicMatch
-        ? `Most relevant topic: ${topicMatch}`
-        : `Best summary answer: ${summary.overallSummary.slice(0, 220)}...`
-    )
-  }, [assistantPrompt, generateQuiz, summary])
+  }, [assistantPrompt, isAsking, sessionId])
 
   const handleAssistantAction = useCallback(
-    (action: "repeat" | "simplify" | "read" | "slide" | "quiz") => {
+    (action: "simplify" | "quiz") => {
       if (!session || !summary) return
-      if (action === "repeat") {
-        const latest = session.savedChunks[session.savedChunks.length - 1]
-        const text = latest?.keyPoints[latest.keyPoints.length - 1] || latest?.title || ""
-        if (text) {
-          readTextAloud(text)
-          setAssistantReply(`Repeated: ${text}`)
-        } else {
-          setAssistantReply("No recent point yet.")
-        }
-        return
-      }
       if (action === "simplify") {
         setShowSimplified(true)
         setAssistantReply("Simplified mode enabled in the Summary section.")
         return
       }
-      if (action === "read") {
-        readTextAloud(transcriptText || summary.overallSummary)
-        setAssistantReply("Reading your transcript/summary aloud.")
-        return
-      }
-      if (action === "slide") {
-        setAssistantReply("Slides are only tracked live. Use saved blocks by timestamp on this page.")
-        return
-      }
       generateQuiz()
       setAssistantReply("Quiz generated from your summary.")
     },
-    [generateQuiz, readTextAloud, session, summary, transcriptText]
+    [generateQuiz, session, summary]
   )
 
   if (loadError) {
@@ -312,13 +392,17 @@ export function SummaryClient() {
 
   if (!summary) {
     return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4">
-        <p className="text-muted-foreground text-center max-w-md">
-          No summary yet. End your lecture from the live page to generate a final study guide.
+      <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-5 px-4">
+        <div className="relative h-12 w-12">
+          <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primary animate-spin" />
+        </div>
+        <p className="text-foreground font-medium text-center">
+          Generating your study guide…
         </p>
-        <Button asChild>
-          <Link href={sessionId ? `/live?sessionId=${sessionId}` : "/live"}>Back to live</Link>
-        </Button>
+        <p className="text-sm text-muted-foreground text-center max-w-sm">
+          This usually takes 15–30 seconds. Please wait.
+        </p>
       </div>
     )
   }
@@ -434,18 +518,32 @@ export function SummaryClient() {
                       size="sm"
                       className="h-10 w-10 rounded-full p-0 glow-primary flex-shrink-0"
                       onClick={readSummaryAloud}
+                      disabled={isLoading}
                     >
-                      {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 ml-0.5" />}
+                      {isLoading ? (
+                        <div className="h-4 w-4 rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground animate-spin" />
+                      ) : isPlaying ? (
+                        <Pause className="h-5 w-5" />
+                      ) : (
+                        <Play className="h-5 w-5 ml-0.5" />
+                      )}
                     </Button>
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-1.5">
                         <span className="text-sm font-medium text-foreground">
-                          {isPlaying ? "Playing notes…" : "Listen to Summary"}
+                          {isLoading ? "Generating audio…" : isPlaying ? "Playing…" : "Listen to Summary"}
                         </span>
-                        <span className="text-xs text-muted-foreground font-mono">-- / --</span>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {audioDuration > 0
+                            ? `${Math.floor(audioCurrentTime / 60)}:${String(Math.floor(audioCurrentTime % 60)).padStart(2, "0")} / ${Math.floor(audioDuration / 60)}:${String(Math.floor(audioDuration % 60)).padStart(2, "0")}`
+                            : "-- / --"}
+                        </span>
                       </div>
                       <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                        <div className="h-full w-0 bg-primary rounded-full" />
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{ width: audioDuration > 0 ? `${(audioCurrentTime / audioDuration) * 100}%` : "0%" }}
+                        />
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -631,7 +729,7 @@ export function SummaryClient() {
                       onClick={handleAssistantPrompt}
                       className="h-9 w-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0 hover:bg-primary/90 transition-colors glow-primary"
                     >
-                      <Mic className="h-4 w-4 text-primary-foreground" />
+                      <ArrowRight className="h-4 w-4 text-primary-foreground" />
                     </button>
                     <input
                       type="text"
@@ -648,29 +746,12 @@ export function SummaryClient() {
                   <div className="space-y-1.5">
                     {[
                       {
-                        icon: RefreshCw,
-                        label: "Repeat Last Point",
-                        description: "Hear the last key point again",
-                        action: "repeat" as const,
-                      },
-                      {
                         icon: Lightbulb,
                         label: "Simplify Concept",
                         description: "Show easier version in summary",
                         action: "simplify" as const,
                       },
-                      {
-                        icon: Volume2,
-                        label: "Read Aloud",
-                        description: "Read transcript or summary",
-                        action: "read" as const,
-                      },
-                      {
-                        icon: Presentation,
-                        label: "Current Slide",
-                        description: "Session-side slide status",
-                        action: "slide" as const,
-                      },
+
                       {
                         icon: GraduationCap,
                         label: "Make Quiz",
