@@ -14,7 +14,6 @@ import {
   Play,
   Square,
   Volume2,
-  VolumeX,
   Bookmark,
   AlertCircle,
   Presentation,
@@ -49,6 +48,7 @@ interface SessionMark {
   kind: SessionMarkKind
   atSec: number
   createdAt: string
+  note: string
 }
 
 export function LiveLectureClient() {
@@ -65,13 +65,12 @@ export function LiveLectureClient() {
 
   const [isRecording, setIsRecording] = useState(true)
   const [isPaused, setIsPaused] = useState(false)
-  const [isTTSActive, setIsTTSActive] = useState(false)
   const [elapsedTime, setElapsedTime] = useState(0)
   const [textSize, setTextSize] = useState(16)
   const [highContrast, setHighContrast] = useState(false)
-  const [speechSpeed, setSpeechSpeed] = useState(1)
   const [currentSlide, setCurrentSlide] = useState(8)
   const [marks, setMarks] = useState<SessionMark[]>([])
+  const [lastMarkLabel, setLastMarkLabel] = useState("")
 
   const streamRef = useRef<PcmStreamHandle | null>(null)
   const speechRecognizerRef = useRef<{
@@ -85,7 +84,6 @@ export function LiveLectureClient() {
     lang: string
   } | null>(null)
   const speechFinalRef = useRef("")
-  const lastAutoReadChunkIdRef = useRef<string | null>(null)
   const shouldRunSpeechRef = useRef(false)
   const pausedRef = useRef(isPaused)
   pausedRef.current = isPaused
@@ -156,37 +154,46 @@ export function LiveLectureClient() {
     setSavedChunks(pub.savedChunks)
   }, [hydrateFromPublic])
 
-  const speakText = useCallback(
-    (text: string) => {
-      if (typeof window === "undefined" || !("speechSynthesis" in window)) return
-      const content = text.trim()
-      if (!content) return
-      window.speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(content)
-      utterance.rate = speechSpeed
-      window.speechSynthesis.speak(utterance)
-    },
-    [speechSpeed]
-  )
-
   const addSessionMark = useCallback(
     (kind: SessionMarkKind) => {
       const createdAt = new Date().toISOString()
       const atSec = elapsedTime
+      const transcriptSource =
+        spokenText.trim() || localSpokenText.trim() || rollingText.trim()
+      const latestLine = transcriptSource
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(-1)[0]
+      const note = latestLine || `Marked at ${formatClock(atSec)}`
       const mark: SessionMark = {
         id: `${kind}-${Date.now()}`,
         kind,
         atSec,
         createdAt,
+        note,
       }
-      setMarks((prev) => [mark, ...prev].slice(0, 50))
-      setApiStatus(
+      setMarks((prev) => {
+        const next = [mark, ...prev].slice(0, 50)
+        if (sessionId) {
+          const key = `lectureMarks:${sessionId}`
+          try {
+            localStorage.setItem(key, JSON.stringify(next))
+            sessionStorage.setItem(key, JSON.stringify(next))
+          } catch {
+            /* ignore */
+          }
+        }
+        return next
+      })
+      const label =
         kind === "confusion"
           ? `Confusion marked at ${formatClock(atSec)}`
           : `Moment saved at ${formatClock(atSec)}`
-      )
+      setLastMarkLabel(label)
+      setApiStatus(label)
     },
-    [elapsedTime]
+    [elapsedTime, localSpokenText, rollingText, sessionId, spokenText]
   )
 
   const flushAudioStream = useCallback(
@@ -393,7 +400,7 @@ export function LiveLectureClient() {
     if (!sessionId) return
     const key = `lectureMarks:${sessionId}`
     try {
-      const raw = sessionStorage.getItem(key)
+      const raw = localStorage.getItem(key) || sessionStorage.getItem(key)
       if (!raw) return
       const parsed = JSON.parse(raw) as SessionMark[]
       if (Array.isArray(parsed)) setMarks(parsed)
@@ -406,27 +413,12 @@ export function LiveLectureClient() {
     if (!sessionId) return
     const key = `lectureMarks:${sessionId}`
     try {
+      localStorage.setItem(key, JSON.stringify(marks))
       sessionStorage.setItem(key, JSON.stringify(marks))
     } catch {
       /* ignore */
     }
   }, [marks, sessionId])
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return
-    if (isTTSActive) return
-    window.speechSynthesis.cancel()
-  }, [isTTSActive])
-
-  useEffect(() => {
-    if (!isTTSActive) return
-    const latest = savedChunks[savedChunks.length - 1]
-    if (!latest) return
-    if (lastAutoReadChunkIdRef.current === latest.id) return
-    lastAutoReadChunkIdRef.current = latest.id
-    const chunkText = [latest.title, ...latest.keyPoints.slice(0, 3)].join(". ")
-    speakText(chunkText)
-  }, [isTTSActive, savedChunks, speakText])
 
   useEffect(() => {
     if (!sessionId) return
@@ -610,8 +602,11 @@ export function LiveLectureClient() {
                           key={mark.id}
                           className="text-xs text-foreground/80 border-l-2 border-primary/30 pl-2"
                         >
-                          {mark.kind === "confusion" ? "Confusion" : "Bookmark"} at{" "}
-                          {formatClock(mark.atSec)}
+                          <p>
+                            {mark.kind === "confusion" ? "Confusion" : "Bookmark"} at{" "}
+                            {formatClock(mark.atSec)}
+                          </p>
+                          <p className="text-muted-foreground line-clamp-2">{mark.note}</p>
                         </div>
                       ))}
                     </div>
@@ -845,29 +840,6 @@ export function LiveLectureClient() {
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Speech Speed</span>
-                      <span className="text-sm text-foreground font-mono">{speechSpeed}x</span>
-                    </div>
-                    <div className="flex gap-1">
-                      {[0.5, 0.75, 1, 1.25, 1.5].map((speed) => (
-                        <button
-                          key={speed}
-                          type="button"
-                          onClick={() => setSpeechSpeed(speed)}
-                          className={`flex-1 py-1.5 text-xs rounded-lg transition-colors ${
-                            speechSpeed === speed
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-secondary/50 text-muted-foreground hover:text-foreground hover:bg-secondary"
-                          }`}
-                        >
-                          {speed}x
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
                     <button
                       type="button"
                       onClick={() => setHighContrast(!highContrast)}
@@ -889,28 +861,6 @@ export function LiveLectureClient() {
                         />
                       </div>
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setIsTTSActive(!isTTSActive)}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${
-                        isTTSActive
-                          ? "bg-primary/15 border-primary/30 text-primary"
-                          : "bg-secondary/50 border-border/30 text-foreground hover:border-primary/20"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        {isTTSActive ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                        <span className="text-sm">Auto Read Notes</span>
-                      </div>
-                      <div
-                        className={`h-5 w-9 rounded-full transition-colors ${isTTSActive ? "bg-primary" : "bg-muted"}`}
-                      >
-                        <div
-                          className={`h-4 w-4 rounded-full bg-background transition-transform mt-0.5 shadow-sm ${isTTSActive ? "translate-x-4 ml-0.5" : "translate-x-0.5"}`}
-                        />
-                      </div>
-                    </button>
                   </div>
                 </CardContent>
               </Card>
@@ -922,6 +872,9 @@ export function LiveLectureClient() {
       <footer className="fixed bottom-0 left-0 right-0 glass-strong border-t border-border/30">
         <div className="px-4 sm:px-6 lg:px-8 py-3">
           <div className="mx-auto max-w-7xl">
+            {lastMarkLabel && (
+              <p className="text-xs text-primary text-center mb-2">{lastMarkLabel}</p>
+            )}
             <div className="flex items-center justify-center gap-3 flex-wrap">
               <Button
                 variant="outline"
@@ -940,7 +893,7 @@ export function LiveLectureClient() {
                 onClick={() => addSessionMark("confusion")}
               >
                 <AlertCircle className="h-4 w-4" />
-                Mark Confusion
+                Mark Confusion ({marks.filter((m) => m.kind === "confusion").length})
               </Button>
 
               <Button
@@ -950,7 +903,7 @@ export function LiveLectureClient() {
                 onClick={() => addSessionMark("bookmark")}
               >
                 <Bookmark className="h-4 w-4" />
-                Save Moment
+                Save Moment ({marks.filter((m) => m.kind === "bookmark").length})
               </Button>
 
               <Button variant="destructive" size="sm" onClick={endSession} className="gap-2">

@@ -12,10 +12,12 @@ import {
   ArrowLeft,
   Download,
   Share2,
+  Mic,
   Play,
   Pause,
   Volume2,
   Bookmark,
+  RefreshCw,
   Search,
   FileText,
   BookOpen,
@@ -23,7 +25,7 @@ import {
   AlertCircle,
   GraduationCap,
   Brain,
-  ListChecks,
+  Presentation,
   ChevronDown,
   ChevronUp,
   Sparkles,
@@ -64,7 +66,9 @@ export function SummaryClient() {
   const [speechRate, setSpeechRate] = useState(1)
   const [aiQuiz, setAiQuiz] = useState<string[]>([])
   const [showSimplified, setShowSimplified] = useState(false)
-  const [marks, setMarks] = useState<Array<{ kind: string; atSec: number }>>([])
+  const [marks, setMarks] = useState<Array<{ kind: string; atSec: number; note?: string }>>([])
+  const [assistantPrompt, setAssistantPrompt] = useState("")
+  const [assistantReply, setAssistantReply] = useState("")
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     summary: true,
     keyPoints: true,
@@ -97,9 +101,10 @@ export function SummaryClient() {
   useEffect(() => {
     if (!sessionId) return
     try {
-      const raw = sessionStorage.getItem(`lectureMarks:${sessionId}`)
+      const key = `lectureMarks:${sessionId}`
+      const raw = localStorage.getItem(key) || sessionStorage.getItem(key)
       if (!raw) return
-      const parsed = JSON.parse(raw) as Array<{ kind: string; atSec: number }>
+      const parsed = JSON.parse(raw) as Array<{ kind: string; atSec: number; note?: string }>
       if (Array.isArray(parsed)) setMarks(parsed)
     } catch {
       /* ignore */
@@ -224,6 +229,82 @@ export function SummaryClient() {
     window.speechSynthesis.cancel()
     window.speechSynthesis.speak(utterance)
   }, [showSimplified, simplifiedSummary, speechRate, summary.overallSummary])
+
+  const readTextAloud = useCallback(
+    (text: string) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) return
+      const content = text.trim()
+      if (!content) return
+      const utterance = new SpeechSynthesisUtterance(content)
+      utterance.rate = speechRate
+      window.speechSynthesis.cancel()
+      window.speechSynthesis.speak(utterance)
+      setIsPlaying(true)
+      utterance.onend = () => setIsPlaying(false)
+    },
+    [speechRate]
+  )
+
+  const handleAssistantPrompt = useCallback(() => {
+    const q = assistantPrompt.trim().toLowerCase()
+    if (!q) return
+
+    if (q.includes("definition")) {
+      const top = summary.majorDefinitions[0]
+      setAssistantReply(
+        top ? `${top.term}: ${top.definition}` : "No definition found in this session."
+      )
+      return
+    }
+
+    if (q.includes("quiz") || q.includes("question")) {
+      generateQuiz()
+      setAssistantReply("Generated a quick quiz below.")
+      return
+    }
+
+    const topicMatch = summary.mainTopics.find((t) =>
+      t.toLowerCase().includes(q.split(" ").find((w) => w.length > 3) || "")
+    )
+    setAssistantReply(
+      topicMatch
+        ? `Most relevant topic: ${topicMatch}`
+        : `Best summary answer: ${summary.overallSummary.slice(0, 220)}...`
+    )
+  }, [assistantPrompt, generateQuiz, summary.mainTopics, summary.majorDefinitions, summary.overallSummary])
+
+  const handleAssistantAction = useCallback(
+    (action: "repeat" | "simplify" | "read" | "slide" | "quiz") => {
+      if (action === "repeat") {
+        const latest = session.savedChunks[session.savedChunks.length - 1]
+        const text = latest?.keyPoints[latest.keyPoints.length - 1] || latest?.title || ""
+        if (text) {
+          readTextAloud(text)
+          setAssistantReply(`Repeated: ${text}`)
+        } else {
+          setAssistantReply("No recent point yet.")
+        }
+        return
+      }
+      if (action === "simplify") {
+        setShowSimplified(true)
+        setAssistantReply("Simplified mode enabled in the Summary section.")
+        return
+      }
+      if (action === "read") {
+        readTextAloud(transcriptText || summary.overallSummary)
+        setAssistantReply("Reading your transcript/summary aloud.")
+        return
+      }
+      if (action === "slide") {
+        setAssistantReply("Slides are only tracked live. Use saved blocks by timestamp on this page.")
+        return
+      }
+      generateQuiz()
+      setAssistantReply("Quiz generated from your summary.")
+    },
+    [generateQuiz, readTextAloud, session.savedChunks, summary.overallSummary, transcriptText]
+  )
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -517,44 +598,105 @@ export function SummaryClient() {
               <Card className="card-futuristic animate-fade-in-up-delay-3">
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center gap-2">
-                    <ListChecks className="h-5 w-5 text-primary" />
+                    <Sparkles className="h-5 w-5 text-primary" />
                     AI Assistant
                   </CardTitle>
-                  <CardDescription>Post-session helpers</CardDescription>
+                  <CardDescription>Ask and run post-session actions</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-2">
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
-                    onClick={() => setShowSimplified((prev) => !prev)}
-                  >
-                    <Brain className="h-4 w-4 mr-2 text-primary" />
-                    {showSimplified ? "Use Original Summary" : "Simplify Summary"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
-                    onClick={generateQuiz}
-                  >
-                    <GraduationCap className="h-4 w-4 mr-2 text-primary" />
-                    Generate Practice Quiz
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
-                    onClick={readSummaryAloud}
-                  >
-                    <Volume2 className="h-4 w-4 mr-2 text-primary" />
-                    {isPlaying ? "Stop Reading" : "Read Summary Aloud"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
-                    onClick={downloadTranscript}
-                  >
-                    <Download className="h-4 w-4 mr-2 text-primary" />
-                    Download Transcript
-                  </Button>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/30">
+                    <button
+                      type="button"
+                      onClick={handleAssistantPrompt}
+                      className="h-9 w-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0 hover:bg-primary/90 transition-colors glow-primary"
+                    >
+                      <Mic className="h-4 w-4 text-primary-foreground" />
+                    </button>
+                    <input
+                      type="text"
+                      placeholder="Ask a question…"
+                      value={assistantPrompt}
+                      onChange={(e) => setAssistantPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleAssistantPrompt()
+                      }}
+                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {[
+                      {
+                        icon: RefreshCw,
+                        label: "Repeat Last Point",
+                        description: "Hear the last key point again",
+                        action: "repeat" as const,
+                      },
+                      {
+                        icon: Lightbulb,
+                        label: "Simplify Concept",
+                        description: "Show easier version in summary",
+                        action: "simplify" as const,
+                      },
+                      {
+                        icon: Volume2,
+                        label: "Read Aloud",
+                        description: "Read transcript or summary",
+                        action: "read" as const,
+                      },
+                      {
+                        icon: Presentation,
+                        label: "Current Slide",
+                        description: "Session-side slide status",
+                        action: "slide" as const,
+                      },
+                      {
+                        icon: GraduationCap,
+                        label: "Make Quiz",
+                        description: "Generate quick practice questions",
+                        action: "quiz" as const,
+                      },
+                    ].map((tool) => (
+                      <button
+                        key={tool.label}
+                        type="button"
+                        onClick={() => handleAssistantAction(tool.action)}
+                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-secondary/50 hover:bg-primary/10 border border-border/30 hover:border-primary/30 transition-all duration-200 text-left group"
+                      >
+                        <tool.icon className="h-4 w-4 text-primary flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground">{tool.label}</p>
+                          <p className="text-xs text-muted-foreground truncate">{tool.description}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant="outline"
+                      className="border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
+                      onClick={() => setShowSimplified((prev) => !prev)}
+                    >
+                      <Brain className="h-4 w-4 mr-2 text-primary" />
+                      {showSimplified ? "Original" : "Simplify"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
+                      onClick={downloadTranscript}
+                    >
+                      <Download className="h-4 w-4 mr-2 text-primary" />
+                      Transcript
+                    </Button>
+                  </div>
+
+                  {assistantReply && (
+                    <div className="p-3 rounded-xl bg-secondary/40 border border-border/30">
+                      <p className="text-xs text-muted-foreground mb-1">Assistant reply</p>
+                      <p className="text-sm text-foreground/90">{assistantReply}</p>
+                    </div>
+                  )}
                   {marks.length > 0 && (
                     <div className="p-3 rounded-xl bg-secondary/40 border border-border/30 mt-2">
                       <p className="text-xs text-muted-foreground mb-1">Session markers</p>
@@ -563,6 +705,7 @@ export function SummaryClient() {
                           <p key={i} className="text-xs text-foreground/80">
                             <Bookmark className="h-3 w-3 inline mr-1" />
                             {m.kind === "confusion" ? "Confusion" : "Bookmark"} at {m.atSec}s
+                            {m.note ? ` - ${m.note}` : ""}
                           </p>
                         ))}
                       </div>
