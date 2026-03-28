@@ -50,6 +50,8 @@ export function LiveLectureClient() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [session, setSession] = useState<PublicSession | null>(null)
   const [spokenText, setSpokenText] = useState("")
+  const [localSpokenText, setLocalSpokenText] = useState("")
+  const [rollingText, setRollingText] = useState("")
   const [savedChunks, setSavedChunks] = useState<SavedChunkNote[]>([])
   const [apiStatus, setApiStatus] = useState<string>("Live")
   const [lastUpdatedLabel, setLastUpdatedLabel] = useState<string>("")
@@ -65,6 +67,18 @@ export function LiveLectureClient() {
   const [currentSlide, setCurrentSlide] = useState(8)
 
   const streamRef = useRef<PcmStreamHandle | null>(null)
+  const speechRecognizerRef = useRef<{
+    start: () => void
+    stop: () => void
+    onresult: ((ev: unknown) => void) | null
+    onerror: ((ev: unknown) => void) | null
+    onend: (() => void) | null
+    continuous: boolean
+    interimResults: boolean
+    lang: string
+  } | null>(null)
+  const speechFinalRef = useRef("")
+  const shouldRunSpeechRef = useRef(false)
   const pausedRef = useRef(isPaused)
   pausedRef.current = isPaused
 
@@ -102,6 +116,7 @@ export function LiveLectureClient() {
   const hydrateFromPublic = useCallback((pub: PublicSession) => {
     setSession(pub)
     setSpokenText(pub.spokenText)
+    setRollingText(pub.rollingText)
     setSavedChunks(pub.savedChunks)
     if (pub.status === "organizing") setApiStatus("Organizing notes…")
     else setApiStatus("Live")
@@ -190,6 +205,124 @@ export function LiveLectureClient() {
       streamRef.current = null
     }
   }, [sessionId, isRecording, mergeChunkResponse])
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    shouldRunSpeechRef.current = isRecording && !isPaused
+
+    const SpeechRecognitionCtor = (
+      window as Window & {
+        SpeechRecognition?: new () => {
+          start: () => void
+          stop: () => void
+          onresult: ((ev: unknown) => void) | null
+          onerror: ((ev: unknown) => void) | null
+          onend: (() => void) | null
+          continuous: boolean
+          interimResults: boolean
+          lang: string
+        }
+        webkitSpeechRecognition?: new () => {
+          start: () => void
+          stop: () => void
+          onresult: ((ev: unknown) => void) | null
+          onerror: ((ev: unknown) => void) | null
+          onend: (() => void) | null
+          continuous: boolean
+          interimResults: boolean
+          lang: string
+        }
+      }
+    ).SpeechRecognition ||
+      (
+        window as Window & {
+          webkitSpeechRecognition?: new () => {
+            start: () => void
+            stop: () => void
+            onresult: ((ev: unknown) => void) | null
+            onerror: ((ev: unknown) => void) | null
+            onend: (() => void) | null
+            continuous: boolean
+            interimResults: boolean
+            lang: string
+          }
+        }
+      ).webkitSpeechRecognition
+
+    if (!SpeechRecognitionCtor) return
+    if (speechRecognizerRef.current) return
+
+    const recognition = new SpeechRecognitionCtor()
+    speechRecognizerRef.current = recognition
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = "en-US"
+
+    recognition.onresult = (ev: unknown) => {
+      const event = ev as {
+        resultIndex: number
+        results: ArrayLike<{
+          isFinal: boolean
+          0?: { transcript?: string }
+        }>
+      }
+
+      let interim = ""
+      let finalChunk = ""
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]
+        const text = result?.[0]?.transcript?.trim()
+        if (!text) continue
+        if (result.isFinal) {
+          finalChunk += `${finalChunk ? " " : ""}${text}`
+        } else {
+          interim += `${interim ? " " : ""}${text}`
+        }
+      }
+
+      if (finalChunk) {
+        speechFinalRef.current = [speechFinalRef.current, finalChunk]
+          .filter(Boolean)
+          .join("\n")
+      }
+      setLocalSpokenText([speechFinalRef.current, interim].filter(Boolean).join("\n"))
+    }
+
+    recognition.onerror = () => {
+      /* ignore fallback speech errors */
+    }
+
+    recognition.onend = () => {
+      if (!shouldRunSpeechRef.current) return
+      try {
+        recognition.start()
+      } catch {
+        /* ignore restart errors */
+      }
+    }
+
+    if (shouldRunSpeechRef.current) {
+      try {
+        recognition.start()
+      } catch {
+        /* ignore start errors */
+      }
+    }
+
+    return () => {
+      shouldRunSpeechRef.current = false
+      if (speechRecognizerRef.current) {
+        speechRecognizerRef.current.onend = null
+        try {
+          speechRecognizerRef.current.stop()
+        } catch {
+          /* ignore */
+        }
+      }
+      speechRecognizerRef.current = null
+    }
+  }, [isPaused, isRecording, sessionId])
 
   useEffect(() => {
     if (!sessionId || isPaused) return
@@ -406,6 +539,14 @@ export function LiveLectureClient() {
                   {spokenText.trim() ? (
                     <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
                       {spokenText}
+                    </p>
+                  ) : localSpokenText.trim() ? (
+                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
+                      {localSpokenText}
+                    </p>
+                  ) : rollingText.trim() ? (
+                    <p className="whitespace-pre-wrap text-sm text-foreground/70 leading-snug">
+                      {rollingText}
                     </p>
                   ) : (
                     <p className="text-sm text-muted-foreground">Waiting for audio...</p>

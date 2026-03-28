@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import {
   consolidateChunk,
+  endLiveAudioStream,
   getChunkIntervalMs,
   isMockMode,
   sendLiveAudioPcm,
@@ -64,6 +65,9 @@ export async function POST(req: Request) {
       const interval = getChunkIntervalMs()
 
       sendLiveAudioPcm(liveSession, pcmBytes)
+      // We stream in discrete HTTP chunks rather than a continuous socket mic stream.
+      // Explicitly ending this segment helps the Live API flush transcription promptly.
+      endLiveAudioStream(liveSession)
 
       const now = Date.now()
       const elapsedSinceStart = now - state.sessionStartMs

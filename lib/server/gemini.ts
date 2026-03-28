@@ -37,13 +37,13 @@ export function getChunkIntervalMs(): number {
 }
 
 /**
- * Multimodal Live API requires a *-live* model. Gemini 3 Flash (REST) is
- * `gemini-3-flash-preview`, which does not support Live; use Gemini 3.1 Flash Live here.
- * @see https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview
+ * Live API default model. Keep this aligned with current Live guide examples.
+ * @see https://ai.google.dev/gemini-api/docs/live-guide
  */
 function getLiveModel(): string {
   return (
-    process.env.GEMINI_LIVE_MODEL?.trim() || "gemini-3.1-flash-live-preview"
+    process.env.GEMINI_LIVE_MODEL?.trim() ||
+    "gemini-2.5-flash-native-audio-preview-12-2025"
   )
 }
 
@@ -65,6 +65,13 @@ function extractTextPartsFromLiveMessage(msg: { text?: string }): {
   modelTurnText: string
 } {
   const liveMsg = msg as {
+    modelTurn?: {
+      parts?: Array<{
+        text?: string
+      }>
+    }
+    inputTranscription?: { text?: string }
+    outputTranscription?: { text?: string }
     serverContent?: {
       modelTurn?: {
         parts?: Array<{
@@ -77,11 +84,18 @@ function extractTextPartsFromLiveMessage(msg: { text?: string }): {
   }
 
   const directText = msg.text?.trim() || ""
-  const inputTranscript = liveMsg.serverContent?.inputTranscription?.text?.trim() || ""
+  const inputTranscript =
+    liveMsg.serverContent?.inputTranscription?.text?.trim() ||
+    liveMsg.inputTranscription?.text?.trim() ||
+    ""
   const outputTranscript =
-    liveMsg.serverContent?.outputTranscription?.text?.trim() || ""
+    liveMsg.serverContent?.outputTranscription?.text?.trim() ||
+    liveMsg.outputTranscription?.text?.trim() ||
+    ""
+  const modelParts =
+    liveMsg.serverContent?.modelTurn?.parts || liveMsg.modelTurn?.parts || []
   const modelTurnText =
-    liveMsg.serverContent?.modelTurn?.parts
+    modelParts
       ?.map((part) => part.text?.trim())
       .filter((part): part is string => Boolean(part))
       .join("\n")
