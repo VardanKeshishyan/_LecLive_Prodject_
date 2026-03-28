@@ -87,7 +87,7 @@ export function SummaryClient() {
 
   useEffect(() => {
     if (!sessionId) {
-      setLoadError("No session id. Start a session from the demo page.")
+      setLoadError("No session id. Start a session from the home page.")
       return
     }
 

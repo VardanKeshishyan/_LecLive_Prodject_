@@ -42,7 +42,6 @@ export function Navbar() {
             {[
               { href: "/", label: "Home" },
               { href: "/#features", label: "Features" },
-              { href: "/session", label: "Demo" },
               { href: "/summary", label: "Summary" },
               { href: "/notes", label: "My Notes" },
             ].map((link) => (
@@ -117,7 +116,6 @@ export function Navbar() {
             {[
               { href: "/", label: "Home" },
               { href: "/#features", label: "Features" },
-              { href: "/session", label: "Demo" },
               { href: "/summary", label: "Summary" },
               { href: "/notes", label: "My Notes" },
             ].map((link) => (
