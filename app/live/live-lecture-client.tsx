@@ -1,7 +1,6 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,6 +12,7 @@ import {
   Pause,
   Play,
   Square,
+  RefreshCw,
   Volume2,
   Bookmark,
   AlertCircle,
@@ -21,6 +21,7 @@ import {
   Sparkles,
   BookOpen,
   HelpCircle,
+  Lightbulb,
   GraduationCap,
   Clock,
   Tag,
@@ -734,40 +735,56 @@ export function LiveLectureClient() {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    After Session Tools
+                    AI Assistant
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    This panel is a preview of what unlocks after ending the lecture.
-                    The full AI helper is available in Summary.
-                  </p>
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/30 opacity-80">
+                    <button
+                      type="button"
+                      disabled
+                      className="h-9 w-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0"
+                    >
+                      <Mic className="h-4 w-4 text-primary-foreground" />
+                    </button>
+                    <input
+                      type="text"
+                      disabled
+                      placeholder="Ask a question..."
+                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    />
+                  </div>
                   <div className="space-y-1.5">
                     {[
                       {
-                        icon: BookOpen,
-                        label: "Simplify Notes",
-                        description: "Get easier explanations from your final summary",
+                        icon: RefreshCw,
+                        label: "Repeat Last Point",
+                        description: "Hear the last key point again",
+                      },
+                      {
+                        icon: Lightbulb,
+                        label: "Simplify Concept",
+                        description: "Explain in simpler terms",
                       },
                       {
                         icon: Volume2,
-                        label: "Read Transcript",
-                        description: "Listen to the full lecture transcript",
+                        label: "Read Aloud",
+                        description: "Read recent notes",
+                      },
+                      {
+                        icon: Presentation,
+                        label: "Current Slide",
+                        description: "What slide are we on?",
                       },
                       {
                         icon: GraduationCap,
-                        label: "Generate Quiz",
-                        description: "Create practice questions from your notes",
-                      },
-                      {
-                        icon: Bookmark,
-                        label: "Review Marks",
-                        description: "Jump to saved moments and confusion markers",
+                        label: "Make Quiz",
+                        description: "Generate a quick quiz from recent notes",
                       },
                     ].map((action, index) => (
                       <div
                         key={index}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-secondary/40 border border-border/30 text-left opacity-85"
+                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/30 text-left opacity-80"
                       >
                         <action.icon className="h-4 w-4 text-primary flex-shrink-0" />
                         <div className="flex-1 min-w-0">
@@ -777,26 +794,9 @@ export function LiveLectureClient() {
                       </div>
                     ))}
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-border/50"
-                      onClick={endSession}
-                    >
-                      End + Open
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-border/50"
-                      asChild
-                    >
-                      <Link href={sessionId ? `/summary?sessionId=${sessionId}` : "/summary"}>
-                        Summary
-                      </Link>
-                    </Button>
-                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    These tools unlock in the Summary page after the session ends.
+                  </p>
                 </CardContent>
               </Card>
 
@@ -893,7 +893,7 @@ export function LiveLectureClient() {
                 onClick={() => addSessionMark("confusion")}
               >
                 <AlertCircle className="h-4 w-4" />
-                Mark Confusion ({marks.filter((m) => m.kind === "confusion").length})
+                Mark Confusion
               </Button>
 
               <Button
@@ -903,7 +903,7 @@ export function LiveLectureClient() {
                 onClick={() => addSessionMark("bookmark")}
               >
                 <Bookmark className="h-4 w-4" />
-                Save Moment ({marks.filter((m) => m.kind === "bookmark").length})
+                Save Moment
               </Button>
 
               <Button variant="destructive" size="sm" onClick={endSession} className="gap-2">
