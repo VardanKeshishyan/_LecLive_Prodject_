@@ -41,6 +41,7 @@ import {
 } from "lucide-react"
 
 const SETUP_STORAGE_KEY = "lectureSessionSetup"
+const SESSION_ERROR_STORAGE_KEY = "lectureSessionError"
 const MATERIAL_TEXT_LIMIT = 6_000
 
 type MicStatus = "idle" | "testing" | "ready" | "error"
@@ -194,6 +195,12 @@ export default function SessionSetupPage() {
 
   useEffect(() => {
     try {
+      const sessionError = sessionStorage.getItem(SESSION_ERROR_STORAGE_KEY)
+      if (sessionError) {
+        setStartError(sessionError)
+        sessionStorage.removeItem(SESSION_ERROR_STORAGE_KEY)
+      }
+
       const raw = sessionStorage.getItem(SETUP_STORAGE_KEY)
       if (raw) {
         const stored = JSON.parse(raw) as Partial<StoredSetup>

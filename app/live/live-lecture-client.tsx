@@ -82,6 +82,8 @@ interface SessionMark {
   note: string
 }
 
+const SESSION_ERROR_STORAGE_KEY = "lectureSessionError"
+
 export function LiveLectureClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -126,8 +128,14 @@ export function LiveLectureClient() {
   const resetMissingSession = () => {
     if (typeof window !== "undefined") {
       sessionStorage.removeItem("lectureSessionId")
+      sessionStorage.setItem(
+        SESSION_ERROR_STORAGE_KEY,
+        "Your live session was reset after a server reload or code change. Start the session again."
+      )
     }
     setApiStatus("Session expired - start again")
+    streamRef.current?.stop()
+    streamRef.current = null
     router.replace("/session")
   }
 
@@ -278,12 +286,12 @@ export function LiveLectureClient() {
           shouldSend: () => !pausedRef.current && !cancelled,
           getTranscript: () => localSpokenTextRef.current,
           onTransportError: (e) => {
-            console.error("[chunk]", e)
             const message = e instanceof Error ? e.message : String(e)
             if (message.includes("Session not found")) {
               resetMissingSession()
               return
             }
+            console.error("[chunk]", e)
             setApiStatus("Live stream error")
           },
           onChunkResponse: (body) => {
