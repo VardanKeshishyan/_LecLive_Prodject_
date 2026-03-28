@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,15 +16,12 @@ import {
   Volume2,
   VolumeX,
   Bookmark,
-  Pin,
   AlertCircle,
   Presentation,
   ChevronRight,
   Sparkles,
-  RefreshCw,
   BookOpen,
   HelpCircle,
-  Lightbulb,
   GraduationCap,
   Clock,
   Tag,
@@ -44,6 +42,15 @@ function formatRange(startSec: number, endSec: number): string {
   return `${formatClock(startSec)}–${formatClock(endSec)}`
 }
 
+type SessionMarkKind = "confusion" | "bookmark"
+
+interface SessionMark {
+  id: string
+  kind: SessionMarkKind
+  atSec: number
+  createdAt: string
+}
+
 export function LiveLectureClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -60,11 +67,11 @@ export function LiveLectureClient() {
   const [isPaused, setIsPaused] = useState(false)
   const [isTTSActive, setIsTTSActive] = useState(false)
   const [elapsedTime, setElapsedTime] = useState(0)
-  const [voiceInput, setVoiceInput] = useState("")
   const [textSize, setTextSize] = useState(16)
   const [highContrast, setHighContrast] = useState(false)
   const [speechSpeed, setSpeechSpeed] = useState(1)
   const [currentSlide, setCurrentSlide] = useState(8)
+  const [marks, setMarks] = useState<SessionMark[]>([])
 
   const streamRef = useRef<PcmStreamHandle | null>(null)
   const speechRecognizerRef = useRef<{
@@ -78,6 +85,7 @@ export function LiveLectureClient() {
     lang: string
   } | null>(null)
   const speechFinalRef = useRef("")
+  const lastAutoReadChunkIdRef = useRef<string | null>(null)
   const shouldRunSpeechRef = useRef(false)
   const pausedRef = useRef(isPaused)
   pausedRef.current = isPaused
@@ -147,6 +155,39 @@ export function LiveLectureClient() {
     hydrateFromPublic(pub)
     setSavedChunks(pub.savedChunks)
   }, [hydrateFromPublic])
+
+  const speakText = useCallback(
+    (text: string) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) return
+      const content = text.trim()
+      if (!content) return
+      window.speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(content)
+      utterance.rate = speechSpeed
+      window.speechSynthesis.speak(utterance)
+    },
+    [speechSpeed]
+  )
+
+  const addSessionMark = useCallback(
+    (kind: SessionMarkKind) => {
+      const createdAt = new Date().toISOString()
+      const atSec = elapsedTime
+      const mark: SessionMark = {
+        id: `${kind}-${Date.now()}`,
+        kind,
+        atSec,
+        createdAt,
+      }
+      setMarks((prev) => [mark, ...prev].slice(0, 50))
+      setApiStatus(
+        kind === "confusion"
+          ? `Confusion marked at ${formatClock(atSec)}`
+          : `Moment saved at ${formatClock(atSec)}`
+      )
+    },
+    [elapsedTime]
+  )
 
   const flushAudioStream = useCallback(
     async (keepalive?: boolean) => {
@@ -350,6 +391,45 @@ export function LiveLectureClient() {
 
   useEffect(() => {
     if (!sessionId) return
+    const key = `lectureMarks:${sessionId}`
+    try {
+      const raw = sessionStorage.getItem(key)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as SessionMark[]
+      if (Array.isArray(parsed)) setMarks(parsed)
+    } catch {
+      /* ignore */
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+    const key = `lectureMarks:${sessionId}`
+    try {
+      sessionStorage.setItem(key, JSON.stringify(marks))
+    } catch {
+      /* ignore */
+    }
+  }, [marks, sessionId])
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return
+    if (isTTSActive) return
+    window.speechSynthesis.cancel()
+  }, [isTTSActive])
+
+  useEffect(() => {
+    if (!isTTSActive) return
+    const latest = savedChunks[savedChunks.length - 1]
+    if (!latest) return
+    if (lastAutoReadChunkIdRef.current === latest.id) return
+    lastAutoReadChunkIdRef.current = latest.id
+    const chunkText = [latest.title, ...latest.keyPoints.slice(0, 3)].join(". ")
+    speakText(chunkText)
+  }, [isTTSActive, savedChunks, speakText])
+
+  useEffect(() => {
+    if (!sessionId) return
 
     const onBeforeUnload = () => {
       const payload = JSON.stringify({ sessionId })
@@ -523,6 +603,19 @@ export function LiveLectureClient() {
                     {session?.fallbackNote ||
                       "Notes emphasize ideas, terms, and exam-relevant signals—not raw transcript."}
                   </p>
+                  {marks.length > 0 && (
+                    <div className="mt-3 space-y-1.5">
+                      {marks.slice(0, 3).map((mark) => (
+                        <div
+                          key={mark.id}
+                          className="text-xs text-foreground/80 border-l-2 border-primary/30 pl-2"
+                        >
+                          {mark.kind === "confusion" ? "Confusion" : "Bookmark"} at{" "}
+                          {formatClock(mark.atSec)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -646,46 +739,68 @@ export function LiveLectureClient() {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    AI Assistant
+                    After Session Tools
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex items-center gap-3 p-3 rounded-xl bg-secondary/50 border border-border/30">
-                    <button
-                      type="button"
-                      className="h-9 w-9 rounded-full bg-primary flex items-center justify-center flex-shrink-0 hover:bg-primary/90 transition-colors glow-primary"
-                    >
-                      <Mic className="h-4 w-4 text-primary-foreground" />
-                    </button>
-                    <input
-                      type="text"
-                      placeholder="Ask a question…"
-                      value={voiceInput}
-                      onChange={(e) => setVoiceInput(e.target.value)}
-                      className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-                    />
-                  </div>
-
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    This panel is a preview of what unlocks after ending the lecture.
+                    The full AI helper is available in Summary.
+                  </p>
                   <div className="space-y-1.5">
                     {[
-                      { icon: RefreshCw, label: "Repeat Last Point", description: "Hear the last key point again" },
-                      { icon: Lightbulb, label: "Simplify Concept", description: "Explain in simpler terms" },
-                      { icon: Volume2, label: "Read Aloud", description: "Read recent notes" },
-                      { icon: Presentation, label: "Current Slide", description: "What slide are we on?" },
-                      { icon: GraduationCap, label: "Make Quiz", description: "Generate a quick quiz from recent notes" },
+                      {
+                        icon: BookOpen,
+                        label: "Simplify Notes",
+                        description: "Get easier explanations from your final summary",
+                      },
+                      {
+                        icon: Volume2,
+                        label: "Read Transcript",
+                        description: "Listen to the full lecture transcript",
+                      },
+                      {
+                        icon: GraduationCap,
+                        label: "Generate Quiz",
+                        description: "Create practice questions from your notes",
+                      },
+                      {
+                        icon: Bookmark,
+                        label: "Review Marks",
+                        description: "Jump to saved moments and confusion markers",
+                      },
                     ].map((action, index) => (
-                      <button
+                      <div
                         key={index}
-                        type="button"
-                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-secondary/50 hover:bg-primary/10 border border-border/30 hover:border-primary/30 transition-all duration-200 text-left group"
+                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-secondary/40 border border-border/30 text-left opacity-85"
                       >
                         <action.icon className="h-4 w-4 text-primary flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-foreground">{action.label}</p>
                           <p className="text-xs text-muted-foreground truncate">{action.description}</p>
                         </div>
-                      </button>
+                      </div>
                     ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-border/50"
+                      onClick={endSession}
+                    >
+                      End + Open
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-border/50"
+                      asChild
+                    >
+                      <Link href={sessionId ? `/summary?sessionId=${sessionId}` : "/summary"}>
+                        Summary
+                      </Link>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -822,12 +937,18 @@ export function LiveLectureClient() {
                 variant="outline"
                 size="sm"
                 className="gap-2 border-chart-3/30 text-chart-3 hover:bg-chart-3/10 hover:border-chart-3/50"
+                onClick={() => addSessionMark("confusion")}
               >
                 <AlertCircle className="h-4 w-4" />
                 Mark Confusion
               </Button>
 
-              <Button variant="outline" size="sm" className="gap-2 border-border/50 hover:border-primary/40">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-border/50 hover:border-primary/40"
+                onClick={() => addSessionMark("bookmark")}
+              >
                 <Bookmark className="h-4 w-4" />
                 Save Moment
               </Button>

@@ -67,8 +67,8 @@ function pcmToBase64(pcm: Int16Array): string {
 }
 
 const TARGET_RATE = 16000
-/** ~2 seconds of audio at 16 kHz mono PCM16 */
-const CHUNK_SAMPLES = TARGET_RATE * 2
+/** ~1 second of audio at 16 kHz mono PCM16 (faster first transcript). */
+const CHUNK_SAMPLES = TARGET_RATE
 
 export interface PcmStreamHandle {
   stop: () => void

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -15,6 +15,7 @@ import {
   Play,
   Pause,
   Volume2,
+  Bookmark,
   Search,
   FileText,
   BookOpen,
@@ -28,6 +29,28 @@ import {
   Sparkles,
 } from "lucide-react"
 
+function downloadTextFile(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function buildTranscript(session: PublicSession): string {
+  const transcript = session.spokenText.trim() || session.rollingText.trim()
+  if (transcript) return transcript
+  if (session.savedChunks.length === 0) return ""
+  return session.savedChunks
+    .map(
+      (chunk) =>
+        `[${chunk.startTimeSec}s-${chunk.endTimeSec}s] ${chunk.title}\n${chunk.keyPoints.join("\n")}`
+    )
+    .join("\n\n")
+}
+
 export function SummaryClient() {
   const searchParams = useSearchParams()
   const sessionId =
@@ -38,6 +61,10 @@ export function SummaryClient() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [isPlaying, setIsPlaying] = useState(false)
+  const [speechRate, setSpeechRate] = useState(1)
+  const [aiQuiz, setAiQuiz] = useState<string[]>([])
+  const [showSimplified, setShowSimplified] = useState(false)
+  const [marks, setMarks] = useState<Array<{ kind: string; atSec: number }>>([])
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     summary: true,
     keyPoints: true,
@@ -45,6 +72,7 @@ export function SummaryClient() {
     examples: true,
     examTopics: true,
   })
+  const speakingRef = useRef(false)
 
   useEffect(() => {
     if (!sessionId) {
@@ -65,6 +93,26 @@ export function SummaryClient() {
       }
     })()
   }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionId) return
+    try {
+      const raw = sessionStorage.getItem(`lectureMarks:${sessionId}`)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Array<{ kind: string; atSec: number }>
+      if (Array.isArray(parsed)) setMarks(parsed)
+    } catch {
+      /* ignore */
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel()
+      }
+    }
+  }, [])
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }))
@@ -108,8 +156,74 @@ export function SummaryClient() {
   }
 
   const summary = session.summary
+  const transcriptText = useMemo(() => buildTranscript(session), [session])
+  const simplifiedSummary = useMemo(() => {
+    const firstTopics = summary.mainTopics.slice(0, 3).join(". ")
+    return `Simple version: ${summary.overallSummary} Main ideas: ${firstTopics || "Review saved notes for details."}`
+  }, [summary.mainTopics, summary.overallSummary])
 
   const noteCount = session.savedChunks.reduce((n, c) => n + c.keyPoints.length, 0) || session.savedChunks.length
+
+  const exportSummary = useCallback(() => {
+    const content = [
+      session.meta.title || "Lecture summary",
+      "",
+      "Overall Summary",
+      summary.overallSummary,
+      "",
+      "Main Topics",
+      ...summary.mainTopics.map((t) => `- ${t}`),
+      "",
+      "Definitions",
+      ...summary.majorDefinitions.map((d) => `- ${d.term}: ${d.definition}`),
+      "",
+      "Examples",
+      ...summary.importantExamples.map((e) => `- ${e}`),
+      "",
+      "Questions / Actions",
+      ...summary.actionItemsOrQuestions.map((q) => `- ${q}`),
+    ].join("\n")
+    downloadTextFile(`${(session.meta.title || "lecture-summary").replace(/\s+/g, "-")}.txt`, content)
+  }, [session, summary])
+
+  const downloadTranscript = useCallback(() => {
+    if (!transcriptText.trim()) return
+    downloadTextFile(
+      `${(session.meta.title || "lecture-transcript").replace(/\s+/g, "-")}.txt`,
+      transcriptText
+    )
+  }, [session.meta.title, transcriptText])
+
+  const generateQuiz = useCallback(() => {
+    const fromTopics = summary.mainTopics.slice(0, 3).map(
+      (topic, i) => `Q${i + 1}. Explain this topic in your own words: ${topic}`
+    )
+    const fromDefs = summary.majorDefinitions.slice(0, 2).map(
+      (d, i) => `Q${fromTopics.length + i + 1}. Define "${d.term}" and give one example.`
+    )
+    setAiQuiz([...fromTopics, ...fromDefs])
+  }, [summary.mainTopics, summary.majorDefinitions])
+
+  const readSummaryAloud = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return
+    if (speakingRef.current) {
+      window.speechSynthesis.cancel()
+      speakingRef.current = false
+      setIsPlaying(false)
+      return
+    }
+    const text = showSimplified ? simplifiedSummary : summary.overallSummary
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = speechRate
+    utterance.onend = () => {
+      speakingRef.current = false
+      setIsPlaying(false)
+    }
+    speakingRef.current = true
+    setIsPlaying(true)
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utterance)
+  }, [showSimplified, simplifiedSummary, speechRate, summary.overallSummary])
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -159,13 +273,41 @@ export function SummaryClient() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="border-border/50 hover:border-primary/40">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-border/50 hover:border-primary/40"
+                  onClick={async () => {
+                    const shareUrl =
+                      typeof window !== "undefined" ? window.location.href : ""
+                    if (!shareUrl) return
+                    try {
+                      await navigator.clipboard.writeText(shareUrl)
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                >
                   <Share2 className="h-4 w-4 mr-2" />
-                  Share
+                  Copy Link
                 </Button>
-                <Button variant="outline" size="sm" className="border-border/50 hover:border-primary/40">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-border/50 hover:border-primary/40"
+                  onClick={downloadTranscript}
+                >
                   <Download className="h-4 w-4 mr-2" />
-                  Export
+                  Transcript
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-border/50 hover:border-primary/40"
+                  onClick={exportSummary}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Export Summary
                 </Button>
               </div>
             </div>
@@ -189,7 +331,7 @@ export function SummaryClient() {
                     <Button
                       size="sm"
                       className="h-10 w-10 rounded-full p-0 glow-primary flex-shrink-0"
-                      onClick={() => setIsPlaying(!isPlaying)}
+                      onClick={readSummaryAloud}
                     >
                       {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 ml-0.5" />}
                     </Button>
@@ -208,11 +350,15 @@ export function SummaryClient() {
                       <Button variant="ghost" size="sm" className="h-8 px-2">
                         <Volume2 className="h-4 w-4" />
                       </Button>
-                      <select className="h-8 px-2 rounded-lg bg-secondary/50 border border-border/30 text-sm text-foreground focus:outline-none">
-                        <option>1x</option>
-                        <option>0.75x</option>
-                        <option>1.25x</option>
-                        <option>1.5x</option>
+                      <select
+                        className="h-8 px-2 rounded-lg bg-secondary/50 border border-border/30 text-sm text-foreground focus:outline-none"
+                        value={String(speechRate)}
+                        onChange={(e) => setSpeechRate(Number(e.target.value))}
+                      >
+                        <option value="0.75">0.75x</option>
+                        <option value="1">1x</option>
+                        <option value="1.25">1.25x</option>
+                        <option value="1.5">1.5x</option>
                       </select>
                     </div>
                   </div>
@@ -226,7 +372,11 @@ export function SummaryClient() {
                   iconColor: "text-primary",
                   title: "Summary",
                   visible: filtered(summary.overallSummary),
-                  content: <p className="text-foreground leading-relaxed">{summary.overallSummary}</p>,
+                  content: (
+                    <p className="text-foreground leading-relaxed">
+                      {showSimplified ? simplifiedSummary : summary.overallSummary}
+                    </p>
+                  ),
                 },
                 {
                   id: "keyPoints",
@@ -368,26 +518,66 @@ export function SummaryClient() {
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center gap-2">
                     <ListChecks className="h-5 w-5 text-primary" />
-                    Study Tools
+                    AI Assistant
                   </CardTitle>
-                  <CardDescription>Generate study materials</CardDescription>
+                  <CardDescription>Post-session helpers</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {[
-                    { icon: Brain, label: "Generate Flashcards" },
-                    { icon: GraduationCap, label: "Create Practice Quiz" },
-                    { icon: FileText, label: "Save to Study Guide" },
-                    { icon: Download, label: "Download Notes (PDF)" },
-                  ].map((tool) => (
-                    <Button
-                      key={tool.label}
-                      variant="outline"
-                      className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
-                    >
-                      <tool.icon className="h-4 w-4 mr-2 text-primary" />
-                      {tool.label}
-                    </Button>
-                  ))}
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
+                    onClick={() => setShowSimplified((prev) => !prev)}
+                  >
+                    <Brain className="h-4 w-4 mr-2 text-primary" />
+                    {showSimplified ? "Use Original Summary" : "Simplify Summary"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
+                    onClick={generateQuiz}
+                  >
+                    <GraduationCap className="h-4 w-4 mr-2 text-primary" />
+                    Generate Practice Quiz
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
+                    onClick={readSummaryAloud}
+                  >
+                    <Volume2 className="h-4 w-4 mr-2 text-primary" />
+                    {isPlaying ? "Stop Reading" : "Read Summary Aloud"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start border-border/50 hover:border-primary/40 hover:bg-primary/5 transition-all"
+                    onClick={downloadTranscript}
+                  >
+                    <Download className="h-4 w-4 mr-2 text-primary" />
+                    Download Transcript
+                  </Button>
+                  {marks.length > 0 && (
+                    <div className="p-3 rounded-xl bg-secondary/40 border border-border/30 mt-2">
+                      <p className="text-xs text-muted-foreground mb-1">Session markers</p>
+                      <div className="space-y-1">
+                        {marks.slice(0, 3).map((m, i) => (
+                          <p key={i} className="text-xs text-foreground/80">
+                            <Bookmark className="h-3 w-3 inline mr-1" />
+                            {m.kind === "confusion" ? "Confusion" : "Bookmark"} at {m.atSec}s
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {aiQuiz.length > 0 && (
+                    <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 mt-2 space-y-1.5">
+                      <p className="text-xs text-primary font-medium">Quick Quiz</p>
+                      {aiQuiz.map((q, i) => (
+                        <p key={i} className="text-xs text-foreground/90">
+                          {q}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
