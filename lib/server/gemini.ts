@@ -21,8 +21,8 @@ Your job is NOT to produce a verbatim transcript. Instead, continuously extract 
 - examples, formulas, or warnings the instructor emphasizes
 - anything likely to appear on an exam
 
+CRITICAL: The audio may be noisy, but you MUST ONLY use the English language. Assume the speaker is speaking English. Do not output any language other than English.
 Respond in concise text. Prefer short labeled lines when helpful (e.g. "Definition:", "Example:", "Exam tip:").
-Treat the lecture audio as English-only. If a phrase is ambiguous, normalize it into clear English instead of switching languages.
 Do not roleplay as a chatbot; output study-relevant content only.`
 
 function describeSessionPreferences(state: InternalSessionState): string {
@@ -196,7 +196,7 @@ export async function connectLiveSession(
   const session = await ai.live.connect({
     model,
     config: {
-      responseModalities: [Modality.AUDIO],
+      responseModalities: [Modality.TEXT],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: {

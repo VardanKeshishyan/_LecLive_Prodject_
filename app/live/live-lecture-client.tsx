@@ -730,13 +730,13 @@ export function LiveLectureClient() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pt-3 max-h-36 overflow-y-auto">
-                  {localSpokenText.trim() ? (
-                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
-                      {localSpokenText}
-                    </p>
-                  ) : spokenText.trim() ? (
+                  {spokenText.trim() ? (
                     <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
                       {spokenText}
+                    </p>
+                  ) : localSpokenText.trim() ? (
+                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-snug">
+                      {localSpokenText}
                     </p>
                   ) : rollingText.trim() ? (
                     <p className="whitespace-pre-wrap text-sm text-foreground/70 leading-snug">
