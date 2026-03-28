@@ -1,0 +1,16 @@
+{
+  "0": {
+    "realtimeInput": {}
+  },
+  "1": {
+    "realtimeInput": {}
+  },
+  "2": {
+    "realtimeInput": {
+      "audio": {
+        "data": "a",
+        "mimeType": "audio/pcm;rate=16000"
+      }
+    }
+  }
+}

@@ -166,6 +166,9 @@ export function handleLiveServerMessage(
 
   if (inputTranscript) {
     appendSpokenText(state, inputTranscript)
+    // CRITICAL: This is the 'fuel' for Saved Structured Notes!
+    // Without appending to bufferSinceLastChunk, the consolidation model sees an empty transcript.
+    state.bufferSinceLastChunk += `${inputTranscript}\n`
   }
 
   if (outputTranscript) {
@@ -202,8 +205,8 @@ export async function connectLiveSession(
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          silenceDurationMs: 200,
-          prefixPaddingMs: 20,
+          silenceDurationMs: 100, // Reduced from 200 for faster transcription turns
+          prefixPaddingMs: 0,     // Reduced from 20 for faster response
         },
       },
       systemInstruction: {

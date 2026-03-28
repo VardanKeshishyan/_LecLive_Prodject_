@@ -119,7 +119,9 @@ export function LiveLectureClient() {
   const shouldRunSpeechRef = useRef(false)
   const pausedRef = useRef(isPaused)
   const appliedSessionPreferencesRef = useRef(false)
+  const localSpokenTextRef = useRef("")
   pausedRef.current = isPaused
+  localSpokenTextRef.current = localSpokenText
 
   const resetMissingSession = () => {
     if (typeof window !== "undefined") {
@@ -274,6 +276,7 @@ export function LiveLectureClient() {
         const handle = await startPcmStreaming(sessionId, {
           deviceId: preferredMicrophoneId || undefined,
           shouldSend: () => !pausedRef.current && !cancelled,
+          getTranscript: () => localSpokenTextRef.current,
           onTransportError: (e) => {
             console.error("[chunk]", e)
             const message = e instanceof Error ? e.message : String(e)

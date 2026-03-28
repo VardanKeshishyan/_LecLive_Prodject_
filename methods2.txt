@@ -1,0 +1,14 @@
+sendRealtimeInput(params) {
+        let clientMessage = {};
+        if (this.apiClient.isVertexAI()) {
+            clientMessage = {
+                'realtimeInput': liveSendRealtimeInputParametersToVertex(params),
+            };
+        }
+        else {
+            clientMessage = {
+                'realtimeInput': liveSendRealtimeInputParametersToMldev(params),
+            };
+        }
+        this.conn.send(JSON.stringify(clientMessage));
+    }

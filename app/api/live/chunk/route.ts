@@ -18,7 +18,7 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 export async function POST(req: Request) {
-  let body: { sessionId?: string; audioBase64?: string }
+  let body: { sessionId?: string; audioBase64?: string; transcriptText?: string }
   try {
     body = await req.json()
   } catch {
@@ -65,9 +65,15 @@ export async function POST(req: Request) {
       const interval = getChunkIntervalMs()
 
       sendLiveAudioPcm(liveSession, pcmBytes)
-      // We stream in discrete HTTP chunks rather than a continuous socket mic stream.
-      // Explicitly ending this segment helps the Live API flush transcription promptly.
       endLiveAudioStream(liveSession)
+
+      // Use browser speech recognition text as the consolidation buffer source.
+      // The Gemini Live model in TEXT mode does not emit inputTranscription events,
+      // so we rely on what the client's Web Speech API heard.
+      const transcriptText = body.transcriptText?.trim()
+      if (transcriptText) {
+        state.bufferSinceLastChunk += `${transcriptText}\n`
+      }
 
       const now = Date.now()
       const elapsedSinceStart = now - state.sessionStartMs
@@ -75,21 +81,22 @@ export async function POST(req: Request) {
         ? now - state.lastSavedChunkAtMs
         : elapsedSinceStart
 
-      const shouldConsolidate =
-        state.bufferSinceLastChunk.trim().length >= 50 &&
-        elapsedSinceLastSave >= interval
+      const bufLen = state.bufferSinceLastChunk.trim().length
+      const shouldConsolidate = bufLen >= 10 && elapsedSinceLastSave >= interval
 
       if (shouldConsolidate) {
+        console.log(`[chunk] CONSOLIDATING ${bufLen}chars elapsed=${Math.round(elapsedSinceLastSave/1000)}s`)
         state.status = "organizing"
         try {
           const chunk = await consolidateChunk(
             state,
             state.bufferSinceLastChunk
           )
+          console.log(`[chunk] consolidate SUCCESS: ${chunk.title}`)
           pushSavedChunk(state, chunk)
           newSavedBlocks.push(chunk)
         } catch (e) {
-          console.error("[chunk] consolidate", e)
+          console.error("[chunk] consolidate FAILED", e)
         }
         state.status = "live"
       }

@@ -88,6 +88,8 @@ export async function startPcmStreaming(
     shouldSend?: () => boolean
     /** Server JSON from /api/live/chunk (includes session snapshot) */
     onChunkResponse?: (body: unknown) => void
+    /** Returns the latest browser speech text to send with each chunk */
+    getTranscript?: () => string
   } = {}
 ): Promise<PcmStreamHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -120,7 +122,7 @@ export async function startPcmStreaming(
       const res = await fetch("/api/live/chunk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, audioBase64 }),
+        body: JSON.stringify({ sessionId, audioBase64, transcriptText: options.getTranscript?.() ?? "" }),
       })
       if (!res.ok) {
         throw new Error(await res.text())
