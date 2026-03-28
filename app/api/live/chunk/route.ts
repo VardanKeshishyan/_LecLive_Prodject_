@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
 import {
-  applyMockChunk,
   consolidateChunk,
   getChunkIntervalMs,
   isMockMode,
@@ -40,56 +39,72 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "audioBase64 required" }, { status: 400 })
   }
 
-  const result = await enqueueSessionWork(state, async () => {
-    const newSavedBlocks: SavedChunkNote[] = []
+  if (state.mockMode || isMockMode() || !state.liveSession) {
+    return NextResponse.json(
+      { error: "Live session is not active. Start a valid Live API session first." },
+      { status: 409 }
+    )
+  }
 
-    const interval = getChunkIntervalMs()
+  let pcmBytes: Uint8Array
+  try {
+    const buf = Buffer.from(audioBase64, "base64")
+    pcmBytes = new Uint8Array(buf)
+  } catch {
+    return NextResponse.json({ error: "Invalid audioBase64 payload" }, { status: 400 })
+  }
 
-    if (state.mockMode || isMockMode() || !state.liveSession) {
-      applyMockChunk(state)
-    } else {
-      try {
-        const buf = Buffer.from(audioBase64, "base64")
-        sendLiveAudioPcm(state.liveSession, new Uint8Array(buf))
-      } catch (e) {
-        console.error("[chunk] audio decode/send", e)
-        applyMockChunk(state)
+  const liveSession = state.liveSession
+
+  let result: ChunkResponse
+  try {
+    result = await enqueueSessionWork(state, async () => {
+      const newSavedBlocks: SavedChunkNote[] = []
+
+      const interval = getChunkIntervalMs()
+
+      sendLiveAudioPcm(liveSession, pcmBytes)
+
+      const now = Date.now()
+      const elapsedSinceStart = now - state.sessionStartMs
+      const elapsedSinceLastSave = state.lastSavedChunkAtMs
+        ? now - state.lastSavedChunkAtMs
+        : elapsedSinceStart
+
+      const shouldConsolidate =
+        state.bufferSinceLastChunk.trim().length >= 50 &&
+        elapsedSinceLastSave >= interval
+
+      if (shouldConsolidate) {
+        state.status = "organizing"
+        try {
+          const chunk = await consolidateChunk(
+            state,
+            state.bufferSinceLastChunk
+          )
+          pushSavedChunk(state, chunk)
+          newSavedBlocks.push(chunk)
+        } catch (e) {
+          console.error("[chunk] consolidate", e)
+        }
+        state.status = "live"
       }
-    }
 
-    const now = Date.now()
-    const elapsedSinceStart = now - state.sessionStartMs
-    const elapsedSinceLastSave = state.lastSavedChunkAtMs
-      ? now - state.lastSavedChunkAtMs
-      : elapsedSinceStart
-
-    const shouldConsolidate =
-      state.bufferSinceLastChunk.trim().length >= 50 &&
-      elapsedSinceLastSave >= interval
-
-    if (shouldConsolidate) {
-      state.status = "organizing"
-      try {
-        const chunk = await consolidateChunk(
-          state,
-          state.bufferSinceLastChunk
-        )
-        pushSavedChunk(state, chunk)
-        newSavedBlocks.push(chunk)
-      } catch (e) {
-        console.error("[chunk] consolidate", e)
+      const res: ChunkResponse = {
+        liveBullets: state.liveBullets,
+        newSavedBlocks,
+        status: state.status,
+        lastUpdated: state.lastUpdated,
       }
-      state.status = "live"
-    }
-
-    const res: ChunkResponse = {
-      liveBullets: state.liveBullets,
-      newSavedBlocks,
-      status: state.status,
-      lastUpdated: state.lastUpdated,
-    }
-    return res
-  })
+      return res
+    })
+  } catch (e) {
+    console.error("[chunk] audio send failed", e)
+    return NextResponse.json(
+      { error: "Live audio stream send failed" },
+      { status: 502 }
+    )
+  }
 
   return NextResponse.json({
     ...result,

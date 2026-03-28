@@ -26,16 +26,16 @@ export async function POST(req: Request) {
     /* empty body ok */
   }
 
-  const state = createSession(meta)
-
   if (isMockMode()) {
-    state.mockMode = true
-    return NextResponse.json({
-      sessionId: state.id,
-      session: toPublicSession(state),
-      fallbackNote: "Mock mode: set GEMINI_API_KEY and GEMINI_MOCK=0 for live API.",
-    })
+    return NextResponse.json(
+      {
+        error: "Live API disabled. Set GEMINI_API_KEY and GEMINI_MOCK=0.",
+      },
+      { status: 400 }
+    )
   }
+
+  const state = createSession(meta)
 
   try {
     const live = await connectLiveSession(state)
@@ -43,13 +43,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ sessionId: state.id, session: toPublicSession(state) })
   } catch (e) {
     console.error("[start] Live connect failed", e)
-    state.mockMode = true
-    state.fallbackNote =
-      "Live API connection failed; running in degraded mock mode. Check model name and API key."
-    return NextResponse.json({
-      sessionId: state.id,
-      session: toPublicSession(state),
-      fallbackNote: state.fallbackNote,
-    })
+    const message = e instanceof Error ? e.message : "Unknown Live API error"
+    return NextResponse.json(
+      {
+        error: `Live API connection failed: ${message}`,
+      },
+      { status: 502 }
+    )
   }
 }
