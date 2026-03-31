@@ -121,6 +121,7 @@ export function LiveLectureClient() {
   const pausedRef = useRef(isPaused)
   const appliedSessionPreferencesRef = useRef(false)
   const localSpokenTextRef = useRef("")
+  const lastSentFinalTranscriptRef = useRef("")
   const localMaterialsRef = useRef<import("@/lib/types").UploadedMaterial[]>([])
   pausedRef.current = isPaused
   localSpokenTextRef.current = localSpokenText
@@ -285,7 +286,22 @@ export function LiveLectureClient() {
         const handle = await startPcmStreaming(sessionId, {
           deviceId: preferredMicrophoneId || undefined,
           shouldSend: () => !pausedRef.current && !cancelled,
-          getTranscript: () => localSpokenTextRef.current,
+          getTranscript: () => {
+            const current = speechFinalRef.current.trim()
+            const previous = lastSentFinalTranscriptRef.current.trim()
+
+            if (!current || current === previous) {
+              return ""
+            }
+
+            let delta = current
+            if (previous && current.startsWith(previous)) {
+              delta = current.slice(previous.length).trim()
+            }
+
+            lastSentFinalTranscriptRef.current = current
+            return delta
+          },
           onTransportError: (e) => {
             const message = e instanceof Error ? e.message : String(e)
             if (message.includes("Session not found")) {

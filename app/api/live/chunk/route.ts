@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server"
 import {
   consolidateChunk,
-  endLiveAudioStream,
   getChunkIntervalMs,
   isMockMode,
   sendLiveAudioPcm,
 } from "@/lib/server/gemini"
 import {
+  appendSpokenText,
   enqueueSessionWork,
   getSession,
   pushSavedChunk,
@@ -65,13 +65,12 @@ export async function POST(req: Request) {
       const interval = getChunkIntervalMs()
 
       sendLiveAudioPcm(liveSession, pcmBytes)
-      endLiveAudioStream(liveSession)
 
-      // Use browser speech recognition text as the consolidation buffer source.
-      // The Gemini Live model in TEXT mode does not emit inputTranscription events,
-      // so we rely on what the client's Web Speech API heard.
+      // Use browser speech recognition text as a fallback for the live transcript.
+      // This helps the UI show words even before the Live API input transcription arrives.
       const transcriptText = body.transcriptText?.trim()
       if (transcriptText) {
+        appendSpokenText(state, transcriptText)
         state.bufferSinceLastChunk += `${transcriptText}\n`
       }
 

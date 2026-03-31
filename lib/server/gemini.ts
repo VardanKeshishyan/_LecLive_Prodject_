@@ -95,7 +95,7 @@ export function getChunkIntervalMs(): number {
 function getLiveModel(): string {
   return (
     process.env.GEMINI_LIVE_MODEL?.trim() ||
-    "gemini-2.5-flash-native-audio-preview-12-2025"
+    "gemini-3.1-flash-live-preview"
   )
 }
 
@@ -199,14 +199,14 @@ export async function connectLiveSession(
   const session = await ai.live.connect({
     model,
     config: {
-      responseModalities: [Modality.TEXT],
+      responseModalities: [Modality.AUDIO],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          silenceDurationMs: 100, // Reduced from 200 for faster transcription turns
-          prefixPaddingMs: 0,     // Reduced from 20 for faster response
+          silenceDurationMs: 300,
+          prefixPaddingMs: 100,
         },
       },
       systemInstruction: {
