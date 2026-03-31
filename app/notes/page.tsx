@@ -16,6 +16,7 @@ import {
   FileText,
   ArrowLeft,
   XCircle,
+  X,
   GraduationCap,
 } from "lucide-react"
 
@@ -114,6 +115,7 @@ export default function NotesPage() {
   const [notes, setNotes] = useState<StoredNote[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [mergedNote, setMergedNote] = useState<StoredNote | null>(null)
+  const [activeNote, setActiveNote] = useState<StoredNote | null>(null)
 
   useEffect(() => {
     setNotes(loadNotes())
@@ -139,6 +141,7 @@ export default function NotesPage() {
       next.delete(id)
       return next
     })
+    setActiveNote((prev) => (prev?.id === id ? null : prev))
   }, [])
 
   const handleMerge = useCallback(() => {
@@ -284,18 +287,26 @@ export default function NotesPage() {
                     className={`card-futuristic cursor-pointer transition-all duration-200 hover-glow ${
                       isSelected ? "border-primary/50 bg-primary/5 glow-primary" : ""
                     }`}
-                    onClick={() => toggleSelect(note.id)}
+                    onClick={() => setActiveNote(note)}
                   >
                     <CardHeader className="pb-2">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-start gap-3 flex-1 min-w-0">
-                          <div className="mt-0.5 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleSelect(note.id)
+                            }}
+                            className="mt-0.5 flex-shrink-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                            aria-label={isSelected ? "Deselect note" : "Select note"}
+                          >
                             {isSelected ? (
                               <CheckSquare className="h-5 w-5 text-primary" />
                             ) : (
                               <Square className="h-5 w-5 text-muted-foreground/40" />
                             )}
-                          </div>
+                          </button>
                           <div className="min-w-0">
                             <CardTitle className="text-base font-semibold text-foreground truncate">{note.title}</CardTitle>
                             <p className="text-xs text-muted-foreground mt-0.5">
@@ -326,6 +337,7 @@ export default function NotesPage() {
                     </CardHeader>
                     <CardContent>
                       <p className="text-sm text-muted-foreground line-clamp-3">{note.overallSummary}</p>
+                      <p className="text-xs text-primary/80 mt-2">Click card to open full note</p>
                       {note.mainTopics.length > 0 && (
                         <div className="mt-3 flex flex-wrap gap-1.5">
                           {note.mainTopics.slice(0, 4).map((t, i) => (
@@ -348,6 +360,128 @@ export default function NotesPage() {
           )}
         </div>
       </main>
+
+      {activeNote && (
+        <div
+          className="fixed inset-0 z-50 bg-background/75 backdrop-blur-sm px-4 py-6 sm:px-6"
+          onClick={() => setActiveNote(null)}
+        >
+          <div
+            className="mx-auto max-w-4xl h-full sm:h-auto sm:max-h-[92vh] rounded-2xl border border-primary/25 bg-background/95 card-futuristic overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 p-5 border-b border-border/30">
+              <div>
+                <h2 className="text-xl font-bold text-foreground">{activeNote.title}</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {activeNote.course ? `${activeNote.course} · ` : ""}
+                  {new Date(activeNote.createdAt).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => downloadText(`${activeNote.title}.txt`, noteToText(activeNote))}
+                  className="border-border/50"
+                >
+                  <Download className="h-4 w-4 mr-1.5" />
+                  Export
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setActiveNote(null)}
+                  className="h-8 w-8"
+                  aria-label="Close note"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="p-5 sm:p-6 overflow-y-auto max-h-[calc(100vh-170px)] space-y-5">
+              <section className="rounded-xl border border-border/30 bg-secondary/20 p-4">
+                <p className="text-xs font-medium text-primary mb-2">Summary</p>
+                <p className="text-foreground/90 leading-relaxed whitespace-pre-line">
+                  {activeNote.overallSummary}
+                </p>
+              </section>
+
+              {activeNote.mainTopics.length > 0 && (
+                <section className="rounded-xl border border-border/30 bg-secondary/20 p-4">
+                  <p className="text-xs font-medium text-primary mb-2">Main Topics</p>
+                  <ul className="list-disc pl-5 space-y-1 text-foreground/90">
+                    {activeNote.mainTopics.map((topic, index) => (
+                      <li key={index}>{topic}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {activeNote.majorDefinitions.length > 0 && (
+                <section className="rounded-xl border border-border/30 bg-secondary/20 p-4">
+                  <p className="text-xs font-medium text-primary mb-2">Definitions</p>
+                  <div className="space-y-2">
+                    {activeNote.majorDefinitions.map((definition, index) => (
+                      <div key={index} className="rounded-lg border border-border/30 bg-background/40 p-3">
+                        <p className="text-sm font-semibold text-foreground">{definition.term}</p>
+                        <p className="text-sm text-muted-foreground mt-1">{definition.definition}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {activeNote.importantExamples.length > 0 && (
+                <section className="rounded-xl border border-border/30 bg-secondary/20 p-4">
+                  <p className="text-xs font-medium text-primary mb-2">Examples</p>
+                  <ul className="list-disc pl-5 space-y-1 text-foreground/90">
+                    {activeNote.importantExamples.map((example, index) => (
+                      <li key={index}>{example}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {activeNote.actionItemsOrQuestions.length > 0 && (
+                <section className="rounded-xl border border-border/30 bg-secondary/20 p-4">
+                  <p className="text-xs font-medium text-primary mb-2">Questions / Actions</p>
+                  <ul className="list-disc pl-5 space-y-1 text-foreground/90">
+                    {activeNote.actionItemsOrQuestions.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {activeNote.savedChunks.length > 0 && (
+                <section className="rounded-xl border border-border/30 bg-secondary/20 p-4">
+                  <p className="text-xs font-medium text-primary mb-2">Saved Chunks</p>
+                  <div className="space-y-2">
+                    {activeNote.savedChunks.map((chunk, index) => (
+                      <div key={`${chunk.title}-${index}`} className="rounded-lg border border-border/30 bg-background/40 p-3">
+                        <p className="text-sm font-semibold text-foreground">{chunk.title}</p>
+                        {chunk.keyPoints.length > 0 && (
+                          <ul className="list-disc pl-5 mt-2 space-y-1 text-sm text-muted-foreground">
+                            {chunk.keyPoints.map((point, pointIndex) => (
+                              <li key={pointIndex}>{point}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -77,9 +77,6 @@ export function Navbar() {
                 </>
               )}
             </Button>
-            <Button size="sm" variant="outline" type="button" className="border-border/60 hover:border-primary/40 hover:bg-primary/5 transition-all duration-300" asChild>
-              <Link href="/signin">Sign In</Link>
-            </Button>
             <Button size="sm" className="glow-primary group" asChild>
               <Link href="/session">
                 Start Session
@@ -128,9 +125,6 @@ export function Navbar() {
               </Link>
             ))}
             <div className="pt-3 flex flex-col gap-2 border-t border-border/50 mt-2">
-              <Button size="sm" variant="outline" type="button" className="w-full border-border/60 hover:border-primary/40 hover:bg-primary/5 transition-all duration-300" asChild>
-                <Link href="/signin">Sign In</Link>
-              </Button>
               <Button size="sm" className="w-full glow-primary" asChild>
                 <Link href="/session">Start Session</Link>
               </Button>
