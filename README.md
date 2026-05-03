@@ -1,4 +1,4 @@
-# _LecLive_Prodject_
+# _LecLive_Project_
 
 Web Application: https://leclive-prodject.onrender.com/
 
